@@ -26,7 +26,10 @@
 
 ###
 
-<p align="left">I'm ... from ....<br><br>- 🔭 I’m working as ...<br>- 📚 I'm currently learning ...<br>- ⚡ In my free time I ...</p>
+<p align="left">- 🔭 I’m working as someone deeply engaged with technology, always exploring tools like ChatGPT to enhance productivity and creativity.
+- 📚 I'm currently learning more about prompt engineering, AI tools, and how to apply them effectively in different domains.
+- ⚡ In my free time I enjoy experimenting with new technologies, improving workflows, and diving into smart, efficient ways to solve problems.
+</p>
 
 ###
 

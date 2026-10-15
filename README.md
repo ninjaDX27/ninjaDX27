@@ -1,67 +1,34 @@
-<div align="center">
-  <img height="150" src="https://media.giphy.com/media/M9gbBd9nbDrOTu1Mqx/giphy.gif"  />
-</div>
+# Growth & MarTech Manager | Acquisition Systems & Data Architectures
 
-###
+I connect acquisition strategy, web development and measurement infrastructure. My focus is building systems that make campaign performance, lead quality and commercial outcomes easier to inspect.
 
-<div align="center">
-  <img src="https://img.shields.io/static/v1?message=LinkedIn&logo=linkedin&label=&color=0077B5&logoColor=white&labelColor=&style=for-the-badge" height="25" alt="linkedin logo"  />
-  <img src="https://img.shields.io/static/v1?message=Youtube&logo=youtube&label=&color=FF0000&logoColor=white&labelColor=&style=for-the-badge" height="25" alt="youtube logo"  />
-  <img src="https://img.shields.io/static/v1?message=Twitter&logo=twitter&label=&color=1DA1F2&logoColor=white&labelColor=&style=for-the-badge" height="25" alt="twitter logo"  />
-</div>
+## Core competencies
 
-###
+- **Performance acquisition:** Google Ads and Meta Ads, landing page journeys, campaign experimentation and conversion measurement.
+- **MarTech and data:** GTM, GA4, dataLayer contracts, Meta CAPI, attribution parameters and consent-aware event delivery.
+- **Web development and CRO:** Vue 3, Vite, Tailwind CSS, Drupal and accessible conversion experiences.
+- **Analytics:** BigQuery SQL, Looker Studio, acquisition funnels, qualified-lead economics and revenue reconciliation.
+- **AI and operations:** Structured prompts, workflow automation, webhook integrations and reviewable AI-assisted processes.
 
-<div align="center">
-  <img src="https://visitor-badge.laobi.icu/badge?page_id=maurodesouza.maurodesouza&"  />
-</div>
+## Featured engineering portfolio
 
-###
+| Repository | What to inspect | Engineering evidence |
+| --- | --- | --- |
+| [MarTech tracking architecture](https://github.com/ninjaDX27/martech-tracking-architecture) | Event schema, GTM blueprint and CAPI simulator | Contracts, consent gates, identity handling and duplicate-event tests |
+| [Analytics dashboards](https://github.com/ninjaDX27/analytics-dashboards) | Six-month simulated dataset, BigQuery SQL and Looker Studio specification | Metric definitions, aggregation, validation and operating thresholds |
+| [CRO landing pages](https://github.com/ninjaDX27/cro-landing-pages) | Vue 3 landing page and experiment plan | Accessible forms, consent-aware instrumentation and experiment design |
+| [AI workflow automation](https://github.com/ninjaDX27/ai-workflow-automation) | n8n workflow, structured prompts and local runner | Deterministic routing, idempotency and human review boundaries |
 
-<h1 align="center">hey there 👋</h1>
+These repositories are reference implementations with synthetic examples. They demonstrate implementation and testing; commercial results must be supported separately by measured, authorized client evidence.
 
-###
+## How I approach a growth system
 
-<h3 align="left">👩‍💻  About Me</h3>
+```text
+Acquisition → Landing experience → Event contract → Measurement
+                                      ↓
+                              CRM qualification → Revenue
+                                      ↓
+                              Reporting and iteration
+```
 
-###
-
-<p align="left">- 🔭 I’m working as someone deeply engaged with technology, always exploring tools like ChatGPT to enhance productivity and creativity.- 📚 I'm currently learning more about prompt engineering, AI tools, and how to apply them effectively in different domains.- ⚡ In my free time I enjoy experimenting with new technologies, improving workflows, and diving into smart, efficient ways to solve problems.</p>
-
-###
-
-<h3 align="left">🛠 Language and tools</h3>
-
-###
-
-<div align="left">
-  <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/go/go-original-wordmark.svg" height="40" alt="go logo"  />
-  <img width="12" />
-  <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg" height="40" alt="rust logo"  />
-  <img width="12" />
-  <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/ruby/ruby-plain-wordmark.svg" height="40" alt="ruby logo"  />
-  <img width="12" />
-  <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/dot-net/dot-net-plain-wordmark.svg" height="40" alt="dot-net logo"  />
-  <img width="12" />
-  <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/firebase/firebase-plain-wordmark.svg" height="40" alt="firebase logo"  />
-  <img width="12" />
-  <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/amazonwebservices/amazonwebservices-line-wordmark.svg" height="40" alt="amazonwebservices logo"  />
-  <img width="12" />
-  <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/circleci/circleci-plain.svg" height="40" alt="circleci logo"  />
-  <img width="12" />
-  <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/kubernetes/kubernetes-plain.svg" height="40" alt="kubernetes logo"  />
-  <img width="12" />
-  <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/docker/docker-plain-wordmark.svg" height="40" alt="docker logo"  />
-</div>
-
-###
-
-<h3 align="left">🔥   My Stats :</h3>
-
-###
-
-<div align="center">
-  <img src="https://streak-stats.demolab.com?user=maurodesouza&locale=en&mode=daily&theme=dark&hide_border=false&border_radius=5&order=3" height="220" alt="streak graph"  />
-</div>
-
-###
+Start with the business event and its definition. Give it a stable identity. Separate analytics from advertising consent. Reconcile platform delivery with accepted CRM records. Improve the journey through explicit experiments.

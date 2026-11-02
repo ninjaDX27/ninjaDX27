@@ -10,6 +10,16 @@ I connect acquisition strategy, web development and measurement infrastructure. 
 - **Analytics:** BigQuery SQL, Looker Studio, acquisition funnels, qualified-lead economics and revenue reconciliation.
 - **AI and operations:** Structured prompts, workflow automation, webhook integrations and reviewable AI-assisted processes.
 
+## Interactive portfolio and reproducible data projects
+
+- **Portfolio website code:** [Diogo Pinto · Data → Decisions](https://github.com/ninjaDX27/diogopinto) — responsive site; publishing via GitHub Pages requires one-time enablement in repository settings.
+- **Sales Performance Dashboard:** [source, data preparation, Power BI measures](https://github.com/ninjaDX27/diogopinto/tree/main/projects/sales-performance-dashboard).
+- **Customer Repurchase Propensity:** [Python training pipeline and chronological model comparison](https://github.com/ninjaDX27/diogopinto/tree/main/projects/customer-repurchase-propensity).
+- **Run a browser-based app:** [CRO scenario lab in Codespaces](https://codespaces.new/ninjaDX27/cro-landing-pages).
+- **Installation and deployment:** [Portuguese guide for running projects from GitHub links](https://github.com/ninjaDX27/diogopinto/blob/main/docs/COMO_ABRIR_INSTALAR_E_PUBLICAR_APPS.md).
+
+All public case-study demos use synthetic or illustrative data unless explicitly labelled otherwise. A passing automated test is not evidence of a deployed production system.
+
 ## Featured engineering portfolio
 
 | Repository | What to inspect | Engineering evidence |

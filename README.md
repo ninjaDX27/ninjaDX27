@@ -29,7 +29,7 @@ These are the projects I would start with. Each links to source code and methodo
 
 ### A system, not isolated tools
 
-\`\`\`text
+```text
 Acquisition / Campaigns
           ↓
 Landing page → Versioned event + consent gates
@@ -39,7 +39,7 @@ Lead intake → CRM stages → Signed outcome
 Quality / attribution / cohort reconciliation
           ↓
 Dashboard → Business decision → Controlled experiment
-\`\`\`
+```
 
 **Engineering evidence:** documented source, deterministic fixtures, tests and explicit limitations. Examples do not use real financial customer information.
 

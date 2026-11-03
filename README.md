@@ -1,44 +1,74 @@
-# Growth & MarTech Manager | Acquisition Systems & Data Architectures
+# Diogo Pinto
 
-I connect acquisition strategy, web development and measurement infrastructure. My focus is building systems that make campaign performance, lead quality and commercial outcomes easier to inspect.
+### Growth · Marketing Analytics · MarTech · Digital Transformation
 
-## Core competencies
+I connect **customer acquisition, measurement and business operations** to answer a practical question: **what should a team change, and how will we know it worked?**
 
-- **Performance acquisition:** Google Ads and Meta Ads, landing page journeys, campaign experimentation and conversion measurement.
-- **MarTech and data:** GTM, GA4, dataLayer contracts, Meta CAPI, attribution parameters and consent-aware event delivery.
-- **Web development and CRO:** Vue 3, Vite, Tailwind CSS, Drupal and accessible conversion experiences.
-- **Analytics:** BigQuery SQL, Looker Studio, acquisition funnels, qualified-lead economics and revenue reconciliation.
-- **AI and operations:** Structured prompts, workflow automation, webhook integrations and reviewable AI-assisted processes.
+My background spans performance marketing, SEO, customer journeys, analytics and process improvement in financial services. I am also pursuing an MSc in Digital Transformation and building reproducible technical projects to strengthen the engineering side of my work.
 
-## Interactive portfolio and reproducible data projects
+**Focus:** Growth & Performance · Product / Business Analytics · Marketing Operations · Financial Services
 
-- **Portfolio website code:** [Diogo Pinto · Data → Decisions](https://github.com/ninjaDX27/diogopinto) — responsive site; publishing via GitHub Pages requires one-time enablement in repository settings.
-- **Sales Performance Dashboard:** [source, data preparation, Power BI measures](https://github.com/ninjaDX27/diogopinto/tree/main/projects/sales-performance-dashboard).
-- **Customer Repurchase Propensity:** [Python training pipeline and chronological model comparison](https://github.com/ninjaDX27/diogopinto/tree/main/projects/customer-repurchase-propensity).
-- **Run a browser-based app:** [CRO scenario lab in Codespaces](https://codespaces.new/ninjaDX27/cro-landing-pages).
-- **Installation and deployment:** [Portuguese guide for running projects from GitHub links](https://github.com/ninjaDX27/diogopinto/blob/main/docs/COMO_ABRIR_INSTALAR_E_PUBLICAR_APPS.md).
+**Location:** Greater Porto, Portugal · **Working languages:** Portuguese / English
 
-All public case-study demos use synthetic or illustrative data unless explicitly labelled otherwise. A passing automated test is not evidence of a deployed production system.
+[**Explore portfolio code**](https://github.com/ninjaDX27/diogopinto) · [**See runnable CRO lab**](https://codespaces.new/ninjaDX27/cro-landing-pages) · [**Open GitHub projects**](https://github.com/ninjaDX27?tab=repositories)
 
-## Featured engineering portfolio
+---
 
-| Repository | What to inspect | Engineering evidence |
-| --- | --- | --- |
-| [MarTech tracking architecture](https://github.com/ninjaDX27/martech-tracking-architecture) | Event schema, GTM blueprint and CAPI simulator | Contracts, consent gates, identity handling and duplicate-event tests |
-| [Analytics dashboards](https://github.com/ninjaDX27/analytics-dashboards) | Six-month simulated dataset, BigQuery SQL and Looker Studio specification | Metric definitions, aggregation, validation and operating thresholds |
-| [CRO landing pages](https://github.com/ninjaDX27/cro-landing-pages) | Vue 3 landing page and experiment plan | Accessible forms, consent-aware instrumentation and experiment design |
-| [AI workflow automation](https://github.com/ninjaDX27/ai-workflow-automation) | n8n workflow, structured prompts and local runner | Deterministic routing, idempotency and human review boundaries |
+## Selected work
 
-These repositories are reference implementations with synthetic examples. They demonstrate implementation and testing; commercial results must be supported separately by measured, authorized client evidence.
+These are the projects I would start with. Each links to source code and methodology, not just a screenshot.
 
-## How I approach a growth system
+| Project | Business problem | What is implemented |
+| :--- | :--- | :--- |
+| **[Growth Intelligence Pipeline](https://github.com/ninjaDX27/diogopinto/tree/main/projects/growth-intelligence-pipeline)** | Reconcile acquisition, lead qualification, contracts and commercial outcomes | Reproducible synthetic funnel, cohort analysis, revenue assumptions, HTML dashboard, automated tests and an **unconnected local-only MongoDB API scaffold** |
+| **[Mortgage Scenario Lab](https://github.com/ninjaDX27/cro-landing-pages)** | Help users compare mortgage scenarios and understand constraints | Runnable Vue app, financial calculation tests, accessible interactions and fictional offer fixtures |
+| **[MarTech Tracking Architecture](https://github.com/ninjaDX27/martech-tracking-architecture)** | Make acquisition events consistent, consent-aware and auditable | Versioned lead events, dataLayer contract, GA4/Meta CAPI payload simulation and tests |
+| **[Acquisition Analytics](https://github.com/ninjaDX27/analytics-dashboards)** | Connect campaign inputs to qualified-lead and commercial metrics | Seeded synthetic dataset, KPI definitions, BigQuery SQL and validation checks |
+| **[AI Workflow Automation](https://github.com/ninjaDX27/ai-workflow-automation)** | Reduce manual review effort without removing human accountability | Schema-driven extraction **simulation**, provenance checks, review queue and approval guardrails |
+| **[Sales BI + Repurchase Modelling](https://github.com/ninjaDX27/diogopinto/tree/main/projects)** | Understand sales performance and predict repeat purchasing | Order-level ETL, Power BI-ready exports, model evaluation and time-based testing |
 
-```text
-Acquisition → Landing experience → Event contract → Measurement
-                                      ↓
-                              CRM qualification → Revenue
-                                      ↓
-                              Reporting and iteration
-```
+### A system, not isolated tools
 
-Start with the business event and its definition. Give it a stable identity. Separate analytics from advertising consent. Reconcile platform delivery with accepted CRM records. Improve the journey through explicit experiments.
+\`\`\`text
+Acquisition / Campaigns
+          ↓
+Landing page → Versioned event + consent gates
+          ↓
+Lead intake → CRM stages → Signed outcome
+          ↓
+Quality / attribution / cohort reconciliation
+          ↓
+Dashboard → Business decision → Controlled experiment
+\`\`\`
+
+**Engineering evidence:** documented source, deterministic fixtures, tests and explicit limitations. Examples do not use real financial customer information.
+
+## Stack and ways of working
+
+| Area | Tools and methods |
+| :--- | :--- |
+| **Growth** | Google Ads · Meta Ads · SEO · CRO · experiment planning |
+| **Measurement** | GA4 · Google Tag Manager · event schemas · funnel KPIs |
+| **Analytics** | Looker Studio · Power BI · BigQuery SQL learning projects · Python |
+| **Applications** | JavaScript / Node.js · Vue · REST APIs · MongoDB development scaffold |
+| **Delivery** | GitHub Actions · reproducible demos · documentation · review checkpoints |
+| **Strategy** | Customer journeys · KPI definition · process mapping · digital transformation |
+
+Some listed technologies are used in **learning and prototype projects**, not claimed production implementations. I distinguish practical marketing experience from developing engineering skills.
+
+## How to inspect my work
+
+1. Open the project README and **business question**.
+2. Run the documented tests or synthetic demo.
+3. Inspect the **data model, decision logic and limitations**.
+4. Review what remains unimplemented before treating it as production-ready.
+
+The portfolio website is prepared for GitHub Pages, but public deployment requires the repository's initial Pages activation. Until that is complete, [the source repository](https://github.com/ninjaDX27/diogopinto) is the reliable entry point.
+
+[**Portfolio source**](https://github.com/ninjaDX27/diogopinto) · [**Project catalogue**](https://github.com/ninjaDX27/diogopinto/blob/main/docs/PROJECT_CATALOG.md) · [**How to run projects**](https://github.com/ninjaDX27/diogopinto/blob/main/docs/COMO_ABRIR_INSTALAR_E_PUBLICAR_APPS.md)
+
+---
+
+**Open to conversations about Growth Analytics, MarTech, Business Analysis and Digital Transformation.** You can reach me via [my GitHub profile](https://github.com/ninjaDX27).
+
+<sub>All public dashboards and financial examples are explicitly illustrative or synthetic unless accompanied by separately verifiable real-data evidence. A passing CI workflow does not by itself demonstrate a live integration or business uplift.</sub>

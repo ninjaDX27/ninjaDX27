@@ -1,0 +1,98 @@
+{
+  "name": "Resort Exemplo Algarve",
+  "timezone": "Europe/Lisbon",
+  "currency": "EUR",
+  "address": "Praia da Exemplo, 8000-000 Faro, Portugal",
+  "website": "https://www.exemplo-resort.pt",
+  "email": "reservas@exemplo-resort.pt",
+  "languages": [
+    {
+      "code": "pt-PT",
+      "label": "Português",
+      "ttsProvider": "Google",
+      "transcriptionProvider": "Google",
+      "welcomeGreeting": "Olá, obrigado por ligar para o Resort Exemplo Algarve. Fala com o assistente virtual, um sistema de inteligência artificial. Esta chamada não é gravada. Pode pedir a qualquer momento para falar com a receção, ou marcar zero. Em que posso ajudar?"
+    },
+    {
+      "code": "en-GB",
+      "label": "English",
+      "ttsProvider": "Google",
+      "transcriptionProvider": "Google",
+      "welcomeGreeting": "Hello, thank you for calling Resort Exemplo Algarve. You are speaking with a virtual assistant powered by artificial intelligence. This call is not recorded. You can ask for reception at any time or press zero. How can I help?"
+    },
+    {
+      "code": "es-ES",
+      "label": "Español",
+      "ttsProvider": "Google",
+      "transcriptionProvider": "Google",
+      "welcomeGreeting": "Hola, gracias por llamar al Resort Exemplo Algarve. Habla con un asistente virtual de inteligencia artificial. Esta llamada no se graba. Puede pedir hablar con recepción o pulsar cero. ¿En qué puedo ayudarle?"
+    },
+    {
+      "code": "fr-FR",
+      "label": "Français",
+      "ttsProvider": "Google",
+      "transcriptionProvider": "Google",
+      "welcomeGreeting": "Bonjour, merci d'appeler le Resort Exemplo Algarve. Vous parlez avec un assistant virtuel doté d'intelligence artificielle. Cet appel n'est pas enregistré. Vous pouvez demander la réception ou appuyer sur zéro. Comment puis-je vous aider ?"
+    }
+  ],
+  "rooms": [
+    {
+      "id": "duplo_jardim",
+      "name": "Quarto Duplo Vista Jardim",
+      "description": "Cama de casal ou duas camas individuais, varanda para o jardim, 28 metros quadrados.",
+      "max_adults": 2,
+      "max_children": 1,
+      "max_occupancy": 3,
+      "nightly_rate_from": 120,
+      "units": 20
+    },
+    {
+      "id": "duplo_mar",
+      "name": "Quarto Duplo Vista Mar",
+      "description": "Cama de casal, varanda com vista mar, 30 metros quadrados.",
+      "max_adults": 2,
+      "max_children": 1,
+      "max_occupancy": 3,
+      "nightly_rate_from": 160,
+      "units": 15
+    },
+    {
+      "id": "suite_familiar",
+      "name": "Suite Familiar",
+      "description": "Dois quartos, sala, kitchenette e varanda com vista mar, 55 metros quadrados.",
+      "max_adults": 4,
+      "max_children": 3,
+      "max_occupancy": 5,
+      "nightly_rate_from": 260,
+      "units": 8
+    }
+  ],
+  "booking_rules": {
+    "min_nights": 2,
+    "max_nights": 21,
+    "max_days_in_advance": 365
+  },
+  "policies": {
+    "Check-in": "a partir das 15h00",
+    "Check-out": "até às 11h00",
+    "Cancelamento": "gratuito até 7 dias antes da chegada; depois disso é cobrada a primeira noite",
+    "Pagamento": "feito através de um link de pagamento seguro enviado pela equipa de reservas; nunca por telefone",
+    "Crianças": "até aos 3 anos ficam gratuitamente com berço mediante pedido",
+    "Animais": "não são permitidos animais, exceto cães de assistência",
+    "Estacionamento": "gratuito para hóspedes",
+    "Taxa turística": "2 euros por pessoa por noite, até 7 noites, paga no local"
+  },
+  "facilities": [
+    "Piscina exterior aquecida de abril a outubro",
+    "Spa com sauna e banho turco, das 10h00 às 20h00",
+    "Restaurante com pequeno-almoço buffet das 7h30 às 10h30",
+    "Wi-Fi gratuito em todo o resort",
+    "Acesso direto à praia a 200 metros",
+    "Kids club dos 4 aos 12 anos em época alta"
+  ],
+  "faq": [
+    { "q": "O pequeno-almoço está incluído?", "a": "Depende da tarifa; a equipa de reservas confirma no pedido. Para clientes sem pequeno-almoço incluído custa 18 euros por adulto." },
+    { "q": "Têm transfer do aeroporto?", "a": "Sim, a pedido, com custo a partir de 45 euros por trajeto desde o aeroporto de Faro." },
+    { "q": "Aceitam grupos ou eventos?", "a": "Sim, os grupos acima de 5 quartos e eventos são tratados pela receção." }
+  ]
+}

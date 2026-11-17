@@ -52,6 +52,21 @@ const EnvSchema = z
     TWILIO_AUTH_TOKEN: z.string().min(16).optional(),
     TWILIO_VALIDATE_SIGNATURE: bool.default(true),
 
+    /** Voz própria: Asterisk (SIP) + serviço de voz (Whisper/Piper), em alternativa ao Twilio. */
+    ASTERISK_ENABLED: bool.default(false),
+    /** Segredo partilhado com o dialplan do Asterisk (>= 32 caracteres). */
+    ASTERISK_SECRET: z.string().min(32).optional(),
+    AUDIOSOCKET_HOST: z.string().default("127.0.0.1"),
+    AUDIOSOCKET_PORT: z.coerce.number().int().min(1).max(65535).default(9092),
+    SPEECH_URL: z.string().url().default("http://127.0.0.1:8000"),
+    SPEECH_TOKEN: z.string().min(16).optional(),
+    /** Anti-fraude: só se transfere para números com estes prefixos (fixos e móveis PT por omissão). */
+    TRANSFER_ALLOWED_PREFIXES: z
+      .string()
+      .default("+3512,+3519")
+      .transform((s) => s.split(",").map((x) => x.trim()).filter((x) => /^\+\d{1,6}$/.test(x))),
+    VAD_SILENCE_MS: z.coerce.number().int().min(300).max(3000).default(700),
+
     /** Limite global de chamadas simultâneas nesta instância. */
     MAX_CONCURRENT_CALLS: z.coerce.number().int().min(1).max(1000).default(50),
     MAX_CALL_DURATION_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
@@ -72,7 +87,10 @@ const EnvSchema = z
     if (!env.DESKTOP_MODE && !env.DATABASE_URL) {
       ctx.addIssue({ code: "custom", path: ["DATABASE_URL"], message: "obrigatório" });
     }
-    if (!env.DESKTOP_MODE && !env.TWILIO_AUTH_TOKEN) {
+    if (env.ASTERISK_ENABLED && !env.ASTERISK_SECRET) {
+      ctx.addIssue({ code: "custom", path: ["ASTERISK_SECRET"], message: "obrigatório com ASTERISK_ENABLED" });
+    }
+    if (!env.DESKTOP_MODE && !env.ASTERISK_ENABLED && !env.TWILIO_AUTH_TOKEN) {
       ctx.addIssue({ code: "custom", path: ["TWILIO_AUTH_TOKEN"], message: "obrigatório" });
     }
     if (env.NODE_ENV === "production" && !env.TWILIO_VALIDATE_SIGNATURE) {

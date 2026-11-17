@@ -15,7 +15,11 @@ import type { Resort } from "./resort.js";
 import { CallSession } from "./session.js";
 import { SessionTokens, fallbackTwiml, hangupTwiml, isValidTwilioSignature, relayTwiml, unavailableTwiml } from "./twilio.js";
 import { randomBytes } from "node:crypto";
+import { safeEqual } from "./crypto.js";
+import { createServer as createTcpServer, type Server as TcpServer } from "node:net";
 import { mountWeb } from "./web/routes.js";
+import { DEFAULT_VAD, VoiceBridge, type PendingCall, type RelaySocket } from "./voice/bridge.js";
+import { HttpSpeechClient, type SpeechClient } from "./voice/speech-client.js";
 
 export interface AppDeps {
   config: AppConfig;
@@ -27,6 +31,17 @@ export interface AppDeps {
   log: Logger;
   webhookOpts?: WebhookOptions;
   publicDir?: string;
+  /** Serviço de voz para o Asterisk (substituível nos testes). */
+  speech?: SpeechClient;
+}
+
+/** Número marcado (formato do operador SIP) para E.164. */
+export function normalizeDid(raw: string): string | null {
+  let d = raw.replace(/[\s()-]/g, "");
+  if (d.startsWith("00")) d = `+${d.slice(2)}`;
+  else if (/^351\d{9}$/.test(d)) d = `+${d}`;
+  else if (/^[29]\d{8}$/.test(d)) d = `+351${d}`;
+  return /^\+[1-9]\d{6,14}$/.test(d) ? d : null;
 }
 
 const CALL_SID = /^CA[0-9a-f]{32}$/;
@@ -34,10 +49,15 @@ const E164 = /^\+[1-9]\d{6,14}$/;
 const RELAY_PATH = /^\/relay\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/;
 const TEST_RELAY_PATH = /^\/relay-test\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/;
 
-export function createApp(deps: AppDeps): { server: Server; shutdown: () => Promise<void>; activeCalls: () => number } {
+export function createApp(deps: AppDeps): {
+  server: Server;
+  audioServer: TcpServer | null;
+  shutdown: () => Promise<void>;
+  activeCalls: () => number;
+} {
   const { config, log, store } = deps;
   const tokens = new SessionTokens(config.SESSION_SIGNING_SECRET);
-  const sessions = new Map<WebSocket, string>(); // ws -> tenantId
+  const sessions = new Map<WebSocket | RelaySocket, string>(); // ligação -> tenantId
   const wsBase = config.PUBLIC_BASE_URL.replace(/^http/, "ws");
   /** Origens dos browsers que podem usar o painel (o URL público e, na versão PC, o localhost). */
   const allowedOrigins = new Set([new URL(config.PUBLIC_BASE_URL).origin, ...config.EXTRA_ORIGINS]);
@@ -164,6 +184,111 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
     return sendTwiml(res, fallbackTwiml(tenant?.reception_phone ?? null, lang, data.action !== "transfer"));
   });
 
+  // ------------------------------------------------------------ Asterisk (voz própria)
+  const pendingCalls = new Map<string, PendingCall & { expires: number }>();
+  const handoffs = new Map<string, { text: string; expires: number }>();
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const transferAllowed = (n: string | null): n is string =>
+    !!n && /^\+\d{7,15}$/.test(n) && config.TRANSFER_ALLOWED_PREFIXES.some((p) => n.startsWith(p));
+  const gc = () => {
+    const now = Date.now();
+    for (const [k, v] of pendingCalls) if (v.expires < now) pendingCalls.delete(k);
+    for (const [k, v] of handoffs) if (v.expires < now) handoffs.delete(k);
+  };
+  const asteriskAuth = (req: Request, res: Response, next: NextFunction) => {
+    const key = str(req.query.key);
+    if (!config.ASTERISK_ENABLED || !config.ASTERISK_SECRET || key.length !== config.ASTERISK_SECRET.length || !safeEqual(key, config.ASTERISK_SECRET)) {
+      return res.status(403).type("text/plain").send("forbidden");
+    }
+    res.set("cache-control", "no-store");
+    next();
+  };
+  /** Resposta para o dialplan: "ok", "transfer,+351…" ou "reject". */
+  const dialplanTransfer = (tenant: Tenant) =>
+    transferAllowed(tenant.reception_phone) ? `transfer,${tenant.reception_phone}` : "reject";
+
+  app.get("/asterisk/start", asteriskAuth, async (req, res) => {
+    gc();
+    const uuid = str(req.query.uuid).toLowerCase();
+    const did = normalizeDid(str(req.query.did));
+    if (!UUID_RE.test(uuid) || !did) return res.type("text/plain").send("reject");
+    const tenant = await store.tenantByNumber(did);
+    if (!tenant || tenant.status !== "active") return res.type("text/plain").send("reject");
+    const { minutes } = await store.monthStats(tenant.id);
+    if (
+      minutes >= tenant.monthly_minutes_limit ||
+      activeFor(tenant.id) >= tenant.max_concurrent_calls ||
+      sessions.size + pendingCalls.size >= config.MAX_CONCURRENT_CALLS
+    ) {
+      log.warn({ tenant: tenant.id }, "limite do plano ou de capacidade: a encaminhar para a receção");
+      return res.type("text/plain").send(dialplanTransfer(tenant));
+    }
+    const from = str(req.query.from).replace(/[^+\d]/g, "").slice(0, 16);
+    const callSid = `AS${uuid.replace(/-/g, "")}`;
+    const primary = tenant.profile.languages[0]!;
+    pendingCalls.set(uuid, {
+      callSid,
+      tenantId: tenant.id,
+      from: /^\+[1-9]\d{6,14}$/.test(from) ? from : null,
+      language: primary.code,
+      greeting: primary.welcomeGreeting,
+      expires: Date.now() + 60_000,
+    });
+    await store.startCall(tenant.id, callSid, deps.crypto.pseudonymize(from));
+    log.info({ call: callSid, tenant: tenant.id }, "chamada recebida (Asterisk)");
+    res.type("text/plain").send("ok");
+  });
+
+  app.get("/asterisk/handoff", asteriskAuth, (req, res) => {
+    gc();
+    const uuid = str(req.query.uuid).toLowerCase();
+    const h = handoffs.get(uuid);
+    handoffs.delete(uuid);
+    res.type("text/plain").send(h?.text ?? "end");
+  });
+
+  /** Número de receção de cada chamada Asterisk em curso, para a transferência no fim. */
+  const transferTargets = new Map<string, string | null>();
+  const speech = deps.speech ?? new HttpSpeechClient(config.SPEECH_URL, config.SPEECH_TOKEN);
+  const audioServer = config.ASTERISK_ENABLED
+    ? createTcpServer({ noDelay: true }, (socket) => {
+        if (sessions.size >= config.MAX_CONCURRENT_CALLS) return socket.destroy();
+        new VoiceBridge(socket, {
+          // Só aceita chamadas registadas pelo dialplan há menos de 60 s, e uma única vez.
+          claim: (uuid) => {
+            const call = pendingCalls.get(uuid);
+            pendingCalls.delete(uuid);
+            return call && call.expires >= Date.now() ? call : null;
+          },
+          start: (ws, call) => {
+            store
+              .tenantById(call.tenantId)
+              .then((tenant) => {
+                if (!tenant) return ws.close();
+                transferTargets.set(call.callSid, tenant.reception_phone);
+                startSession(ws, tenant, call.callSid);
+              })
+              .catch(() => ws.close());
+          },
+          handoff: (uuid, data) => {
+            const callSid = `AS${uuid.replace(/-/g, "")}`;
+            const target = transferTargets.get(callSid) ?? null;
+            transferTargets.delete(callSid);
+            let text = "end";
+            if (data.action === "transfer") {
+              if (transferAllowed(target)) text = `transfer,${target}`;
+              else log.warn({ call: callSid }, "transferência pedida mas sem número de receção permitido");
+            }
+            handoffs.set(uuid, { text, expires: Date.now() + 120_000 });
+          },
+          speech,
+          vad: { ...DEFAULT_VAD, silenceMs: config.VAD_SILENCE_MS },
+          log,
+        });
+      })
+    : null;
+  audioServer?.on("error", (err) => log.error({ err: err.message }, "erro no servidor AudioSocket"));
+
   mountWeb(app, deps, {
     allowedOrigins,
     /** Emite um token para a chamada de teste no browser (só o dono autenticado chega aqui). */
@@ -197,7 +322,7 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
     socket.destroy();
   };
 
-  const startSession = (ws: WebSocket, tenant: Tenant, callSid: string) => {
+  const startSession = (ws: WebSocket | RelaySocket, tenant: Tenant, callSid: string) => {
     sessions.set(ws, tenant.id);
     const callLog = log.child({ call: callSid, tenant: tenant.id });
     const startedAt = Date.now();
@@ -210,9 +335,12 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
     let alive = true;
     ws.on("pong", () => (alive = true));
     const heartbeat = setInterval(() => {
-      if (!alive) return ws.terminate();
-      alive = false;
-      ws.ping();
+      if ("isPaused" in ws) {
+        // WebSocket real: deteta ligações mortas.
+        if (!alive) return ws.terminate();
+        alive = false;
+        ws.ping();
+      }
     }, 30_000);
 
     const availability =
@@ -220,7 +348,7 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
         ? new HttpAvailabilityProvider(tenant.profile, tenant.pms_url, deps.crypto.decrypt(tenant.pms_token_enc))
         : new StaticAvailabilityProvider(tenant.profile);
 
-    new CallSession(ws, {
+    new CallSession(ws as WebSocket, {
       agentOptions: {
         resort: tenant.profile,
         model: config.CLAUDE_MODEL,
@@ -292,7 +420,8 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
     });
     for (const ws of sessions.keys()) ws.close(1001, "server shutting down");
     wss.close();
+    audioServer?.close();
   };
 
-  return { server, shutdown, activeCalls: () => sessions.size };
+  return { server, audioServer, shutdown, activeCalls: () => sessions.size };
 }

@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   }
 
   const client = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY, maxRetries: 1, timeout: config.LLM_TIMEOUT_MS });
-  const { server, shutdown } = createApp({ config, store, crypto, stream: anthropicStreamFactory(client), resortTemplate, log });
+  const { server, audioServer, shutdown } = createApp({ config, store, crypto, stream: anthropicStreamFactory(client), resortTemplate, log });
 
   // RGPD: limpeza diária dos dados pessoais fora do prazo de retenção.
   const purge = () =>
@@ -42,6 +42,11 @@ async function main(): Promise<void> {
   const purgeTimer = setInterval(purge, 24 * 3600_000);
   purgeTimer.unref();
 
+  if (audioServer) {
+    audioServer.listen(config.AUDIOSOCKET_PORT, config.AUDIOSOCKET_HOST, () =>
+      log.info({ host: config.AUDIOSOCKET_HOST, port: config.AUDIOSOCKET_PORT }, "AudioSocket (Asterisk) pronto"),
+    );
+  }
   server.listen(config.PORT, () => log.info({ port: config.PORT, brand: config.BRAND_NAME, model: config.CLAUDE_MODEL }, "serviço pronto"));
 
   let stopping = false;

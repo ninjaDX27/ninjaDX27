@@ -6,62 +6,71 @@ import helmet from "helmet";
 import type { Logger } from "pino";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { StreamFactory } from "./agent.js";
-import type { AvailabilityProvider } from "./availability.js";
+import { HttpAvailabilityProvider, StaticAvailabilityProvider } from "./availability.js";
 import type { AppConfig } from "./config.js";
-import { pseudonymize } from "./logger.js";
-import type { ReservationSink } from "./reservations.js";
+import type { Crypto } from "./crypto.js";
+import type { Store, Tenant } from "./db/store.js";
+import { DbReservationSink, type WebhookOptions } from "./reservations.js";
 import type { Resort } from "./resort.js";
 import { CallSession } from "./session.js";
-import {
-  SessionTokens,
-  dialReceptionTwiml,
-  hangupTwiml,
-  isValidTwilioSignature,
-  relayTwiml,
-} from "./twilio.js";
+import { SessionTokens, fallbackTwiml, hangupTwiml, isValidTwilioSignature, relayTwiml, unavailableTwiml } from "./twilio.js";
+import { mountWeb } from "./web/routes.js";
 
 export interface AppDeps {
   config: AppConfig;
-  resort: Resort;
+  store: Store;
+  crypto: Crypto;
   stream: StreamFactory;
-  availability: AvailabilityProvider;
-  reservations: ReservationSink;
+  /** Perfil de exemplo usado ao criar um novo cliente. */
+  resortTemplate: Resort;
   log: Logger;
+  webhookOpts?: WebhookOptions;
+  publicDir?: string;
 }
 
 const CALL_SID = /^CA[0-9a-f]{32}$/;
+const E164 = /^\+[1-9]\d{6,14}$/;
 const RELAY_PATH = /^\/relay\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/;
 
 export function createApp(deps: AppDeps): { server: Server; shutdown: () => Promise<void>; activeCalls: () => number } {
-  const { config, log } = deps;
+  const { config, log, store } = deps;
   const tokens = new SessionTokens(config.SESSION_SIGNING_SECRET);
-  const sessions = new Set<WebSocket>();
+  const sessions = new Map<WebSocket, string>(); // ws -> tenantId
   const wsBase = config.PUBLIC_BASE_URL.replace(/^https:/, "wss:");
-  const primaryLang = deps.resort.languages[0]!.code;
+  const activeFor = (tenantId: string) => [...sessions.values()].filter((t) => t === tenantId).length;
 
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", config.TRUST_PROXY);
-  app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'none'"] } } }));
   app.use(
-    rateLimit({
-      windowMs: 60_000,
-      limit: 300,
-      standardHeaders: "draft-8",
-      legacyHeaders: false,
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'none'"],
+          styleSrc: ["'self'"],
+          styleSrcAttr: ["'unsafe-inline'"],
+          scriptSrc: ["'self'"],
+          imgSrc: ["'self'", "data:"],
+          fontSrc: ["'self'"],
+          formAction: ["'self'"],
+          baseUri: ["'none'"],
+          frameAncestors: ["'none'"],
+        },
+      },
+      referrerPolicy: { policy: "same-origin" },
     }),
   );
+  app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: "draft-8", legacyHeaders: false }));
 
   const twilioForm = express.urlencoded({ extended: false, limit: "20kb", parameterLimit: 100 });
 
   /** Rejeita pedidos que não venham assinados pelo Twilio. */
   const requireTwilio = (req: Request, res: Response, next: NextFunction) => {
     if (!config.TWILIO_VALIDATE_SIGNATURE) return next();
-    const url = `${config.PUBLIC_BASE_URL}${req.originalUrl}`;
     const ok = isValidTwilioSignature(
       config.TWILIO_AUTH_TOKEN,
       req.header("x-twilio-signature"),
-      url,
+      `${config.PUBLIC_BASE_URL}${req.originalUrl}`,
       (req.body ?? {}) as Record<string, unknown>,
     );
     if (!ok) {
@@ -74,51 +83,73 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
   const sendTwiml = (res: Response, xml: string) => {
     res.status(200).type("text/xml").set("cache-control", "no-store").send(xml);
   };
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
 
-  app.get("/healthz", (_req, res) => {
-    res.set("cache-control", "no-store").json({ status: "ok" });
+  app.get("/healthz", async (_req, res) => {
+    try {
+      await store.ping();
+      res.set("cache-control", "no-store").json({ status: "ok" });
+    } catch {
+      res.status(503).json({ status: "unavailable" });
+    }
   });
 
-  // Webhook "A call comes in" do número Twilio.
-  app.post("/voice", twilioForm, requireTwilio, (req, res) => {
-    const callSid = typeof req.body?.CallSid === "string" ? req.body.CallSid : "";
-    if (!CALL_SID.test(callSid)) return res.status(400).type("text/plain").send("Bad Request");
-    const callLog = log.child({ call: callSid, caller: pseudonymize(req.body?.From) });
+  // Webhook "A call comes in" de todos os números: o cliente é identificado pelo número marcado.
+  app.post("/voice", twilioForm, requireTwilio, async (req, res) => {
+    const callSid = str(req.body?.CallSid);
+    const to = str(req.body?.To);
+    if (!CALL_SID.test(callSid) || !E164.test(to)) return res.status(400).type("text/plain").send("Bad Request");
 
-    if (sessions.size >= config.MAX_CONCURRENT_CALLS) {
-      callLog.warn("capacidade máxima: a encaminhar para a receção");
-      return sendTwiml(res, dialReceptionTwiml(config.RECEPTION_PHONE_NUMBER, primaryLang, true));
+    const tenant = await store.tenantByNumber(to);
+    if (!tenant || tenant.status !== "active") {
+      log.warn({ call: callSid }, "chamada para número sem cliente ativo");
+      return sendTwiml(res, unavailableTwiml());
     }
-    const token = tokens.issue(callSid);
+    const callLog = log.child({ call: callSid, tenant: tenant.id });
+    const lang = tenant.profile.languages[0]!.code;
+
+    const { minutes } = await store.monthStats(tenant.id);
+    const overLimit =
+      minutes >= tenant.monthly_minutes_limit ||
+      activeFor(tenant.id) >= tenant.max_concurrent_calls ||
+      sessions.size >= config.MAX_CONCURRENT_CALLS;
+    if (overLimit) {
+      callLog.warn("limite do plano ou de capacidade: a encaminhar para a receção");
+      return sendTwiml(res, fallbackTwiml(tenant.reception_phone, lang, true));
+    }
+
+    await store.startCall(tenant.id, callSid, deps.crypto.pseudonymize(str(req.body?.From)));
     callLog.info("chamada recebida");
     sendTwiml(
       res,
       relayTwiml({
-        resort: deps.resort,
-        wsUrl: `${wsBase}/relay/${token}`,
+        resort: tenant.profile,
+        wsUrl: `${wsBase}/relay/${tokens.issue(callSid, tenant.id)}`,
         actionUrl: `${config.PUBLIC_BASE_URL}/handoff`,
       }),
     );
   });
 
   // "action" do <Connect>: chamado quando a sessão do ConversationRelay termina.
-  app.post("/handoff", twilioForm, requireTwilio, (req, res) => {
+  app.post("/handoff", twilioForm, requireTwilio, async (req, res) => {
+    const to = str(req.body?.To);
+    const tenant = E164.test(to) ? await store.tenantByNumber(to) : null;
     let data: { action?: unknown; language?: unknown } = {};
-    if (typeof req.body?.HandoffData === "string" && req.body.HandoffData.length < 2000) {
+    const raw = str(req.body?.HandoffData);
+    if (raw && raw.length < 2000) {
       try {
-        data = JSON.parse(req.body.HandoffData);
+        data = JSON.parse(raw);
       } catch {
         data = {};
       }
     }
-    const lang = typeof data.language === "string" ? data.language : primaryLang;
-    if (data.action === "transfer") {
-      return sendTwiml(res, dialReceptionTwiml(config.RECEPTION_PHONE_NUMBER, lang));
-    }
+    const lang = typeof data.language === "string" ? data.language : (tenant?.profile.languages[0]!.code ?? "pt-PT");
     if (data.action === "end") return sendTwiml(res, hangupTwiml(lang));
-    // Sessão terminou sem pedido explícito (erro/queda da ligação): não abandonar o cliente.
-    return sendTwiml(res, dialReceptionTwiml(config.RECEPTION_PHONE_NUMBER, lang, true));
+    // Transferência pedida, ou sessão terminada por erro: nunca abandonar o cliente.
+    return sendTwiml(res, fallbackTwiml(tenant?.reception_phone ?? null, lang, data.action !== "transfer"));
   });
+
+  mountWeb(app, deps);
 
   app.use((_req, res) => {
     res.status(404).type("text/plain").send("Not Found");
@@ -142,6 +173,57 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
     socket.destroy();
   };
 
+  const startSession = (ws: WebSocket, tenant: Tenant, callSid: string) => {
+    sessions.set(ws, tenant.id);
+    const callLog = log.child({ call: callSid, tenant: tenant.id });
+    const startedAt = Date.now();
+
+    let count = 0;
+    const window = setInterval(() => (count = 0), 1000);
+    ws.on("message", () => {
+      if (++count > 50) ws.close(1008, "rate limit");
+    });
+    let alive = true;
+    ws.on("pong", () => (alive = true));
+    const heartbeat = setInterval(() => {
+      if (!alive) return ws.terminate();
+      alive = false;
+      ws.ping();
+    }, 30_000);
+
+    const availability =
+      tenant.pms_url && tenant.pms_token_enc
+        ? new HttpAvailabilityProvider(tenant.profile, tenant.pms_url, deps.crypto.decrypt(tenant.pms_token_enc))
+        : new StaticAvailabilityProvider(tenant.profile);
+
+    new CallSession(ws, {
+      agentOptions: {
+        resort: tenant.profile,
+        model: config.CLAUDE_MODEL,
+        effort: config.CLAUDE_EFFORT,
+        refusalFallback: config.CLAUDE_REFUSAL_FALLBACK,
+        timeoutMs: config.LLM_TIMEOUT_MS,
+        stream: deps.stream,
+        log: callLog,
+      },
+      availability,
+      reservations: new DbReservationSink(store, deps.crypto, tenant, callLog, deps.webhookOpts),
+      expectedCallSid: callSid,
+      maxTurns: config.MAX_TURNS_PER_CALL,
+      maxUtteranceChars: config.MAX_UTTERANCE_CHARS,
+      maxCallDurationMs: config.MAX_CALL_DURATION_SECONDS * 1000,
+      log: callLog,
+      onClose: (stats) => {
+        sessions.delete(ws);
+        clearInterval(window);
+        clearInterval(heartbeat);
+        store
+          .endCall(callSid, { ...stats, duration_s: Math.round((Date.now() - startedAt) / 1000) })
+          .catch((err: unknown) => callLog.error({ err: err instanceof Error ? err.message : "?" }, "falha ao registar chamada"));
+      },
+    });
+  };
+
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
     const match = RELAY_PATH.exec(path);
@@ -150,8 +232,7 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
     if (config.TWILIO_VALIDATE_SIGNATURE) {
       const header = req.headers["x-twilio-signature"];
       const sig = Array.isArray(header) ? header[0] : header;
-      // O URL assinado é o nosso próprio URL público (wss://, ou https:// consoante a
-      // versão do Twilio). Ambos derivam de PUBLIC_BASE_URL, não do cabeçalho Host.
+      // O URL assinado deriva sempre de PUBLIC_BASE_URL, nunca do cabeçalho Host.
       const ok =
         isValidTwilioSignature(config.TWILIO_AUTH_TOKEN, sig, `${wsBase}${req.url ?? ""}`, {}) ||
         isValidTwilioSignature(config.TWILIO_AUTH_TOKEN, sig, `${config.PUBLIC_BASE_URL}${req.url ?? ""}`, {});
@@ -160,59 +241,25 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
         return reject(socket, 403, "Forbidden");
       }
     }
-    const callSid = tokens.consume(match[1]!);
-    if (!callSid) return reject(socket, 403, "Forbidden");
+    const claim = tokens.consume(match[1]!);
+    if (!claim) return reject(socket, 403, "Forbidden");
     if (sessions.size >= config.MAX_CONCURRENT_CALLS) return reject(socket, 503, "Service Unavailable");
 
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      sessions.add(ws);
-      const callLog = log.child({ call: callSid });
-
-      // Limite de mensagens por segundo por ligação.
-      let count = 0;
-      const window = setInterval(() => (count = 0), 1000);
-      ws.on("message", () => {
-        if (++count > 50) ws.close(1008, "rate limit");
-      });
-
-      // Heartbeat: termina ligações mortas.
-      let alive = true;
-      ws.on("pong", () => (alive = true));
-      const heartbeat = setInterval(() => {
-        if (!alive) return ws.terminate();
-        alive = false;
-        ws.ping();
-      }, 30_000);
-
-      new CallSession(ws, {
-        agentOptions: {
-          resort: deps.resort,
-          model: config.CLAUDE_MODEL,
-          effort: config.CLAUDE_EFFORT,
-          refusalFallback: config.CLAUDE_REFUSAL_FALLBACK,
-          timeoutMs: config.LLM_TIMEOUT_MS,
-          stream: deps.stream,
-          log: callLog,
-        },
-        availability: deps.availability,
-        reservations: deps.reservations,
-        expectedCallSid: callSid,
-        maxTurns: config.MAX_TURNS_PER_CALL,
-        maxUtteranceChars: config.MAX_UTTERANCE_CHARS,
-        maxCallDurationMs: config.MAX_CALL_DURATION_SECONDS * 1000,
-        log: callLog,
-        onClose: () => {
-          sessions.delete(ws);
-          clearInterval(window);
-          clearInterval(heartbeat);
-        },
-      });
-    });
+    store
+      .tenantById(claim.tenantId)
+      .then((tenant) => {
+        if (!tenant || tenant.status !== "active") return reject(socket, 403, "Forbidden");
+        wss.handleUpgrade(req, socket, head, (ws) => startSession(ws, tenant, claim.callSid));
+      })
+      .catch(() => reject(socket, 503, "Service Unavailable"));
   });
 
   const shutdown = async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    for (const ws of sessions) ws.close(1001, "server shutting down");
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      server.closeIdleConnections();
+    });
+    for (const ws of sessions.keys()) ws.close(1001, "server shutting down");
     wss.close();
   };
 

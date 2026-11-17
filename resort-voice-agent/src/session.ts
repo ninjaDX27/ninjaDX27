@@ -37,7 +37,13 @@ export interface SessionDeps {
   maxUtteranceChars: number;
   maxCallDurationMs: number;
   log: Logger;
-  onClose: () => void;
+  onClose: (stats: SessionStats) => void;
+}
+
+export interface SessionStats {
+  turns: number;
+  outcome: "transfer" | "end" | "hangup";
+  language: string;
 }
 
 /** Remove formatação que soaria mal em voz (markdown, emojis). */
@@ -59,6 +65,7 @@ export class CallSession {
   private chain: Promise<void> = Promise.resolve();
   private interruptedNote: string | null = null;
   private ended = false;
+  private outcome: SessionStats["outcome"] = "hangup";
   private readonly durationTimer: NodeJS.Timeout;
   private readonly log: Logger;
 
@@ -187,6 +194,7 @@ export class CallSession {
   private finish(action: CallAction): void {
     if (this.ended) return;
     this.ended = true;
+    this.outcome = action.type === "transfer" ? "transfer" : "end";
     const handoff = JSON.stringify({
       action: action.type === "transfer" ? "transfer" : "end",
       reason: action.type === "switch_language" ? "" : action.reason.slice(0, 200),
@@ -222,7 +230,7 @@ export class CallSession {
     this.disposed = true;
     clearTimeout(this.durationTimer);
     this.current?.abort();
-    this.deps.onClose();
+    this.deps.onClose({ turns: this.agent?.turns ?? 0, outcome: this.outcome, language: this.language });
     this.log.info("sessão terminada");
   }
 }

@@ -1,47 +1,47 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { anthropicStreamFactory } from "./agent.js";
-import { HttpAvailabilityProvider, StaticAvailabilityProvider, type AvailabilityProvider } from "./availability.js";
 import { loadConfig } from "./config.js";
+import { Crypto, hashPassword, temporaryPassword } from "./crypto.js";
+import { Store } from "./db/store.js";
 import { createLogger } from "./logger.js";
-import { LogOnlyReservationSink, WebhookReservationSink, type ReservationSink } from "./reservations.js";
 import { loadResort } from "./resort.js";
 import { createApp } from "./server.js";
 
-function main(): void {
+async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger(config.LOG_LEVEL);
-  const resort = loadResort(config.RESORT_CONFIG_PATH);
+  const crypto = new Crypto(config.MASTER_ENCRYPTION_KEY);
+  const resortTemplate = loadResort("config/resort.example.json");
 
-  const client = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY, maxRetries: 1, timeout: config.LLM_TIMEOUT_MS });
+  const store = new Store(config.DATABASE_URL, config.DATABASE_SSL);
+  await store.migrate();
 
-  const availability: AvailabilityProvider =
-    config.AVAILABILITY_PROVIDER === "http"
-      ? new HttpAvailabilityProvider(resort, config.PMS_API_URL!, config.PMS_API_TOKEN!)
-      : new StaticAvailabilityProvider(resort);
-
-  let reservations: ReservationSink;
-  if (config.RESERVATION_WEBHOOK_URL && config.RESERVATION_WEBHOOK_SECRET) {
-    reservations = new WebhookReservationSink(config.RESERVATION_WEBHOOK_URL, config.RESERVATION_WEBHOOK_SECRET, log);
-  } else {
-    log.warn("RESERVATION_WEBHOOK_URL não definido: os pedidos de reserva NÃO serão entregues a ninguém");
-    reservations = new LogOnlyReservationSink(log);
+  // Primeiro arranque: cria a conta de administrador da plataforma.
+  if (!(await store.adminExists())) {
+    const password = config.ADMIN_INITIAL_PASSWORD ?? temporaryPassword();
+    await store.ensureAdmin(config.ADMIN_EMAIL.toLowerCase(), await hashPassword(password));
+    if (config.ADMIN_INITIAL_PASSWORD) {
+      log.info({ email: config.ADMIN_EMAIL }, "conta de administrador criada com ADMIN_INITIAL_PASSWORD (alteração obrigatória no primeiro acesso)");
+    } else {
+      // Mostrada uma única vez, fora do logger estruturado. Tem de ser alterada no primeiro acesso.
+      console.log(`\n=== Conta de administrador criada ===\nE-mail: ${config.ADMIN_EMAIL}\nPalavra-passe temporária: ${password}\n=====================================\n`);
+    }
   }
 
-  const { server, shutdown } = createApp({
-    config,
-    resort,
-    stream: anthropicStreamFactory(client),
-    availability,
-    reservations,
-    log,
-  });
+  const client = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY, maxRetries: 1, timeout: config.LLM_TIMEOUT_MS });
+  const { server, shutdown } = createApp({ config, store, crypto, stream: anthropicStreamFactory(client), resortTemplate, log });
 
-  server.listen(config.PORT, () => {
-    log.info(
-      { port: config.PORT, resort: resort.name, model: config.CLAUDE_MODEL, availability: config.AVAILABILITY_PROVIDER },
-      "agente de voz pronto",
-    );
-  });
+  // RGPD: limpeza diária dos dados pessoais fora do prazo de retenção.
+  const purge = () =>
+    store
+      .purge(config.RETENTION_DAYS)
+      .then((n) => n > 0 && log.info({ anonymized: n }, "retenção aplicada"))
+      .catch((err: unknown) => log.error({ err: err instanceof Error ? err.message : "?" }, "falha na limpeza de retenção"));
+  void purge();
+  const purgeTimer = setInterval(purge, 24 * 3600_000);
+  purgeTimer.unref();
+
+  server.listen(config.PORT, () => log.info({ port: config.PORT, brand: config.BRAND_NAME, model: config.CLAUDE_MODEL }, "serviço pronto"));
 
   let stopping = false;
   const stop = (signal: string) => {
@@ -51,6 +51,7 @@ function main(): void {
     const force = setTimeout(() => process.exit(1), 10_000);
     force.unref();
     shutdown()
+      .then(() => store.close())
       .then(() => process.exit(0))
       .catch(() => process.exit(1));
   };
@@ -61,10 +62,7 @@ function main(): void {
   });
 }
 
-try {
-  main();
-} catch (err) {
-  // Erros de configuração: mensagem clara e saída com código != 0.
-  console.error((err as Error).message);
+main().catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
-}
+});

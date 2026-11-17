@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
 import { HttpAvailabilityProvider, StaticAvailabilityProvider, validateStay } from "../src/availability.js";
 import { loadConfig } from "../src/config.js";
-import { WebhookReservationSink, type ReservationSink } from "../src/reservations.js";
+import { deliverWebhook, type ReservationSink } from "../src/reservations.js";
+import { Crypto, hashPassword, passwordPolicyError, temporaryPassword, verifyPassword } from "../src/crypto.js";
+import { isPrivateAddress, publicHttpsUrlError } from "../src/net.js";
 import { buildSystemPrompt } from "../src/resort.js";
 import { sanitizeForSpeech } from "../src/session.js";
 import { executeTool, type ToolContext } from "../src/tools.js";
 import { SessionTokens } from "../src/twilio.js";
-import { TEST_ENV, daysFromNow, silentLog, testResort } from "./helpers.js";
+import { TEST_ENV, daysFromNow, testResort } from "./helpers.js";
 
 const resort = testResort();
 
@@ -38,6 +40,7 @@ describe("config", () => {
       loadConfig({ ...TEST_ENV, SESSION_SIGNING_SECRET: "curto" } as NodeJS.ProcessEnv);
     } catch (e) {
       expect((e as Error).message).not.toContain(TEST_ENV.TWILIO_AUTH_TOKEN);
+      expect((e as Error).message).not.toContain("curto");
       expect((e as Error).message).toContain("SESSION_SIGNING_SECRET");
     }
   });
@@ -48,10 +51,8 @@ describe("config", () => {
     ).toThrow(/TWILIO_VALIDATE_SIGNATURE/);
   });
 
-  it("exige segredo quando há webhook de reservas", () => {
-    expect(() =>
-      loadConfig({ ...TEST_ENV, RESERVATION_WEBHOOK_URL: "https://hook.test/x" } as NodeJS.ProcessEnv),
-    ).toThrow(/RESERVATION_WEBHOOK_SECRET/);
+  it("exige uma chave mestra de 64 caracteres hex", () => {
+    expect(() => loadConfig({ ...TEST_ENV, MASTER_ENCRYPTION_KEY: "curta" } as NodeJS.ProcessEnv)).toThrow(/MASTER_ENCRYPTION_KEY/);
   });
 });
 
@@ -155,15 +156,15 @@ describe("SessionTokens", () => {
   const sid = "CA" + "a".repeat(32);
   it("é de uso único", () => {
     const t = new SessionTokens("s".repeat(40));
-    const tok = t.issue(sid);
-    expect(t.consume(tok)).toBe(sid);
+    const tok = t.issue(sid, "tenant-1");
+    expect(t.consume(tok)).toEqual({ callSid: sid, tenantId: "tenant-1" });
     expect(t.consume(tok)).toBeNull();
   });
   it("rejeita tokens adulterados, de outro segredo ou expirados", () => {
     const t = new SessionTokens("s".repeat(40), 1000);
-    const tok = t.issue(sid);
+    const tok = t.issue(sid, "tenant-1");
     const [p, s] = tok.split(".");
-    const forged = Buffer.from(JSON.stringify({ c: "CA" + "b".repeat(32), e: Date.now() + 9e6 })).toString("base64url");
+    const forged = Buffer.from(JSON.stringify({ c: "CA" + "b".repeat(32), t: "outro", e: Date.now() + 9e6 })).toString("base64url");
     expect(t.consume(`${forged}.${s}`)).toBeNull();
     expect(new SessionTokens("o".repeat(40)).consume(tok)).toBeNull();
     expect(t.consume(`${p}.${s}`, Date.now() + 5000)).toBeNull();
@@ -172,39 +173,31 @@ describe("SessionTokens", () => {
 });
 
 describe("integrações externas", () => {
+  const publicResolver = async () => ["93.184.216.34"];
+
   it("webhook de reservas assina com HMAC e timestamp", async () => {
     const secret = "w".repeat(40);
     const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 200 }));
-    const sink = new WebhookReservationSink("https://hook.test/r", secret, silentLog, fetchMock as typeof fetch);
-    await sink.submit({
-      call_sid: "CA1",
-      caller_phone: null,
-      guest_name: "Ana",
-      contact_phone: null,
-      email: "a@b.pt",
-      check_in: "2030-01-01",
-      check_out: "2030-01-03",
-      adults: 2,
-      children: 0,
-      room_type: "duplo_mar",
-      quoted_total: 320,
-      currency: "EUR",
-      notes: null,
-      language: "pt-PT",
-      consent_to_contact: true,
-    });
+    const ok = await deliverWebhook("https://hook.example.com/r", secret, { request_id: "r-1", guest_name: "Ana" }, { fetchImpl: fetchMock as typeof fetch, resolver: publicResolver });
+    expect(ok).toBe(true);
     const init = fetchMock.mock.calls[0]![1]!;
     const headers = init.headers as Record<string, string>;
     const expected = createHmac("sha256", secret).update(`${headers["x-timestamp"]}.${init.body}`).digest("hex");
     expect(headers["x-signature"]).toBe(`sha256=${expected}`);
+    expect(headers["idempotency-key"]).toBe("r-1");
     expect(init.redirect).toBe("error");
   });
 
-  it("webhook não repete erros 4xx e lança erro", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 400 }));
-    const sink = new WebhookReservationSink("https://hook.test/r", "w".repeat(40), silentLog, fetchMock as typeof fetch);
-    await expect(sink.submit({} as never)).rejects.toThrow();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+  it("webhook não repete erros 4xx, repete 5xx e recusa destinos privados", async () => {
+    const f400 = vi.fn(async () => new Response(null, { status: 400 }));
+    expect(await deliverWebhook("https://hook.example.com/r", "s", { request_id: "a" }, { fetchImpl: f400 as typeof fetch, resolver: publicResolver })).toBe(false);
+    expect(f400).toHaveBeenCalledTimes(1);
+    const f500 = vi.fn(async () => new Response(null, { status: 503 }));
+    expect(await deliverWebhook("https://hook.example.com/r", "s", { request_id: "a" }, { fetchImpl: f500 as typeof fetch, resolver: publicResolver, retryDelayMs: 1 })).toBe(false);
+    expect(f500).toHaveBeenCalledTimes(3);
+    const never = vi.fn();
+    expect(await deliverWebhook("https://interno.example.com/r", "s", { request_id: "a" }, { fetchImpl: never as unknown as typeof fetch, resolver: async () => ["10.0.0.5"] })).toBe(false);
+    expect(never).not.toHaveBeenCalled();
   });
 
   it("PMS HTTP valida a resposta e ignora quartos desconhecidos", async () => {
@@ -238,5 +231,54 @@ describe("prompt e voz", () => {
   });
   it("remove markdown e emojis do texto falado", () => {
     expect(sanitizeForSpeech("**Olá** 😀 # bem-vindo")).toBe("Olá   bem-vindo");
+  });
+});
+
+describe("criptografia", () => {
+  const c = new Crypto("ab".repeat(32));
+  it("cifra e decifra, com IV aleatório, e deteta adulteração", () => {
+    const a = c.encrypt("Ana Silva");
+    expect(a).not.toContain("Ana");
+    expect(c.encrypt("Ana Silva")).not.toBe(a);
+    expect(c.decrypt(a)).toBe("Ana Silva");
+    const parts = a.split(".");
+    parts[3] = Buffer.from("outro texto").toString("base64url");
+    expect(() => c.decrypt(parts.join("."))).toThrow();
+    expect(() => new Crypto("cd".repeat(32)).decrypt(a)).toThrow();
+  });
+  it("pseudonimiza de forma estável e dependente da chave", () => {
+    expect(c.pseudonymize("+351910000000")).toBe(c.pseudonymize("+351910000000"));
+    expect(c.pseudonymize("+351910000000")).not.toContain("3519");
+    expect(new Crypto("cd".repeat(32)).pseudonymize("+351910000000")).not.toBe(c.pseudonymize("+351910000000"));
+  });
+  it("palavras-passe: hash com sal, verificação e política", async () => {
+    const h1 = await hashPassword("uma-password-longa-1");
+    expect(h1).not.toBe(await hashPassword("uma-password-longa-1"));
+    expect(await verifyPassword("uma-password-longa-1", h1)).toBe(true);
+    expect(await verifyPassword("outra-password-longa-1", h1)).toBe(false);
+    expect(await verifyPassword("x", "lixo")).toBe(false);
+    expect(passwordPolicyError("curta1")).toBeTruthy();
+    expect(passwordPolicyError("sem-numeros-aqui")).toBeTruthy();
+    expect(passwordPolicyError(temporaryPassword())).toBeNull();
+  });
+});
+
+describe("proteção SSRF", () => {
+  it("identifica endereços privados", () => {
+    for (const ip of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:10.0.0.1"]) {
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    }
+    for (const ip of ["93.184.216.34", "8.8.8.8", "2606:4700::1111"]) expect(isPrivateAddress(ip), ip).toBe(false);
+  });
+  it("só aceita HTTPS para destinos públicos", async () => {
+    const pub = async () => ["93.184.216.34"];
+    expect(await publicHttpsUrlError("https://hook.example.com/x", pub)).toBeNull();
+    expect(await publicHttpsUrlError("http://hook.example.com/x", pub)).toBeTruthy();
+    expect(await publicHttpsUrlError("https://user:pw@hook.example.com/x", pub)).toBeTruthy();
+    expect(await publicHttpsUrlError("https://hook.example.com:8443/x", pub)).toBeTruthy();
+    expect(await publicHttpsUrlError("https://169.254.169.254/latest", pub)).toBeTruthy();
+    expect(await publicHttpsUrlError("https://localhost/x", pub)).toBeTruthy();
+    expect(await publicHttpsUrlError("https://db.internal/x", pub)).toBeTruthy();
+    expect(await publicHttpsUrlError("https://rebind.example.com/x", async () => ["93.184.216.34", "10.0.0.1"])).toBeTruthy();
   });
 });

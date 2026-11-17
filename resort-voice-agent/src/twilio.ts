@@ -33,30 +33,30 @@ export class SessionTokens {
     private readonly ttlMs = 120_000,
   ) {}
 
-  issue(callSid: string, now = Date.now()): string {
-    const payload = Buffer.from(JSON.stringify({ c: callSid, e: now + this.ttlMs })).toString("base64url");
+  issue(callSid: string, tenantId: string, now = Date.now()): string {
+    const payload = Buffer.from(JSON.stringify({ c: callSid, t: tenantId, e: now + this.ttlMs })).toString("base64url");
     return `${payload}.${this.sign(payload)}`;
   }
 
-  /** Devolve o CallSid se o token for válido e ainda não usado. */
-  consume(token: string, now = Date.now()): string | null {
+  /** Devolve a chamada e o cliente se o token for válido e ainda não usado. */
+  consume(token: string, now = Date.now()): { callSid: string; tenantId: string } | null {
     if (typeof token !== "string" || token.length > 512) return null;
     const [payload, sig] = token.split(".");
     if (!payload || !sig) return null;
     const expected = Buffer.from(this.sign(payload));
     const given = Buffer.from(sig);
     if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
-    let data: { c?: unknown; e?: unknown };
+    let data: { c?: unknown; t?: unknown; e?: unknown };
     try {
       data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     } catch {
       return null;
     }
-    if (typeof data.c !== "string" || typeof data.e !== "number" || data.e < now) return null;
+    if (typeof data.c !== "string" || typeof data.t !== "string" || typeof data.e !== "number" || data.e < now) return null;
     this.gc(now);
     if (this.used.has(token)) return null;
     this.used.set(token, data.e);
-    return data.c;
+    return { callSid: data.c, tenantId: data.t };
   }
 
   private sign(payload: string): string {
@@ -133,4 +133,22 @@ export function hangupTwiml(langCode: string): string {
   r.say({ language: lang }, GOODBYE_MSG[key]!);
   r.hangup();
   return r.toString();
+}
+
+const NOT_CONFIGURED: Record<string, string> = {
+  pt: "Este número não está disponível de momento. Por favor, tente mais tarde.",
+  en: "This number is not available at the moment. Please try again later.",
+};
+
+export function unavailableTwiml(): string {
+  const r = new VoiceResponse();
+  r.say({ language: "pt-PT" }, NOT_CONFIGURED.pt!);
+  r.say({ language: "en-GB" }, NOT_CONFIGURED.en!);
+  r.hangup();
+  return r.toString();
+}
+
+/** Encaminha para a receção se houver número; caso contrário despede-se. */
+export function fallbackTwiml(reception: string | null, langCode: string, announce: boolean): string {
+  return reception ? dialReceptionTwiml(reception, langCode, announce) : unavailableTwiml();
 }

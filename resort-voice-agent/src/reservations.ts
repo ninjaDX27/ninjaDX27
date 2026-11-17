@@ -1,9 +1,10 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { Logger } from "pino";
+import type { Crypto } from "./crypto.js";
+import type { Store, Tenant } from "./db/store.js";
+import { publicHttpsUrlError, type Resolver } from "./net.js";
 
-export interface ReservationRequest {
-  request_id: string;
-  created_at: string;
+export interface ReservationInput {
   call_sid: string;
   caller_phone: string | null;
   guest_name: string;
@@ -19,79 +20,115 @@ export interface ReservationRequest {
   notes: string | null;
   language: string;
   consent_to_contact: true;
-  status: "pending_confirmation";
+}
+
+/** Dados pessoais guardados cifrados (AES-256-GCM) na base de dados. */
+export interface ReservationPii {
+  guest_name: string;
+  caller_phone: string | null;
+  contact_phone: string | null;
+  email: string | null;
+  notes: string | null;
+  language: string;
 }
 
 export interface ReservationSink {
-  submit(req: Omit<ReservationRequest, "request_id" | "created_at" | "status">): Promise<{ request_id: string }>;
+  submit(req: ReservationInput): Promise<{ request_id: string }>;
+}
+
+export interface WebhookOptions {
+  fetchImpl?: typeof fetch;
+  resolver?: Resolver;
+  retryDelayMs?: number;
 }
 
 /**
- * Envia o pedido para um webhook (CRM, n8n, Make, PMS...) com:
- * - Assinatura HMAC-SHA256 em "X-Signature" sobre `${timestamp}.${body}`
- * - Timestamp em "X-Timestamp" (o recetor deve rejeitar > 5 min: anti-replay)
- * - "Idempotency-Key" igual ao request_id (seguro para repetir)
- * - Timeout e 3 tentativas com backoff exponencial
+ * Entrega a um webhook do cliente com:
+ * - HMAC-SHA256 em "X-Signature" sobre `${timestamp}.${body}` e "X-Timestamp" (anti-replay)
+ * - "Idempotency-Key", timeout, 3 tentativas com backoff, sem redirects
+ * - verificação anti-SSRF do destino no momento da entrega
  */
-export class WebhookReservationSink implements ReservationSink {
+export async function deliverWebhook(
+  url: string,
+  secret: string,
+  payload: { request_id: string } & Record<string, unknown>,
+  opts: WebhookOptions = {},
+): Promise<boolean> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  if (await publicHttpsUrlError(url, opts.resolver)) return false;
+  const body = JSON.stringify(payload);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const signature = createHmac("sha256", secret).update(`${ts}.${body}`).digest("hex");
+    try {
+      const res = await fetchImpl(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-timestamp": ts,
+          "x-signature": `sha256=${signature}`,
+          "idempotency-key": payload.request_id,
+        },
+        body,
+        redirect: "error",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) return true;
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) return false;
+    } catch {
+      /* tenta outra vez */
+    }
+    if (attempt < 3) await new Promise((r) => setTimeout(r, (opts.retryDelayMs ?? 250) * 2 ** attempt));
+  }
+  return false;
+}
+
+/**
+ * Guarda o pedido na base de dados (fonte de verdade, visível no painel) e,
+ * se o cliente tiver webhook, entrega-o em segundo plano. A chamada não fica
+ * à espera do sistema do cliente.
+ */
+export class DbReservationSink implements ReservationSink {
   constructor(
-    private readonly url: string,
-    private readonly secret: string,
+    private readonly store: Store,
+    private readonly crypto: Crypto,
+    private readonly tenant: Tenant,
     private readonly log: Logger,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly webhookOpts: WebhookOptions = {},
   ) {}
 
-  async submit(input: Omit<ReservationRequest, "request_id" | "created_at" | "status">) {
-    const payload: ReservationRequest = {
-      ...input,
-      request_id: randomUUID(),
-      created_at: new Date().toISOString(),
-      status: "pending_confirmation",
+  async submit(req: ReservationInput): Promise<{ request_id: string }> {
+    const pii: ReservationPii = {
+      guest_name: req.guest_name,
+      caller_phone: req.caller_phone,
+      contact_phone: req.contact_phone,
+      email: req.email,
+      notes: req.notes,
+      language: req.language,
     };
-    const body = JSON.stringify(payload);
+    const id = await this.store.insertReservation({
+      tenant_id: this.tenant.id,
+      call_sid: req.call_sid,
+      pii_enc: this.crypto.encrypt(JSON.stringify(pii)),
+      check_in: req.check_in,
+      check_out: req.check_out,
+      room_type: req.room_type,
+      adults: req.adults,
+      children: req.children,
+      quoted_total: req.quoted_total,
+      currency: req.currency,
+    });
 
-    let lastErr: unknown;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const ts = Math.floor(Date.now() / 1000).toString();
-      const signature = createHmac("sha256", this.secret).update(`${ts}.${body}`).digest("hex");
-      try {
-        const res = await this.fetchImpl(this.url, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-timestamp": ts,
-            "x-signature": `sha256=${signature}`,
-            "idempotency-key": payload.request_id,
-          },
-          body,
-          redirect: "error",
-          signal: AbortSignal.timeout(5000),
-        });
-        if (res.ok) return { request_id: payload.request_id };
-        lastErr = new Error(`webhook respondeu ${res.status}`);
-        if (res.status >= 400 && res.status < 500 && res.status !== 429) break; // não repetir erros do cliente
-      } catch (err) {
-        lastErr = err;
-      }
-      if (attempt < 3) await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
+    const { webhook_url, webhook_secret_enc } = this.tenant;
+    if (webhook_url && webhook_secret_enc) {
+      const payload = { ...req, request_id: id, created_at: new Date().toISOString(), status: "pending_confirmation" };
+      void deliverWebhook(webhook_url, this.crypto.decrypt(webhook_secret_enc), payload, this.webhookOpts)
+        .then(async (ok) => {
+          if (ok) await this.store.markDelivered(id);
+          else this.log.warn({ request_id: id }, "webhook de reservas falhou; o pedido fica no painel");
+        })
+        .catch((err: unknown) => this.log.error({ err: err instanceof Error ? err.message : "?" }, "erro na entrega do webhook"));
     }
-    this.log.error({ err: String(lastErr), request_id: payload.request_id }, "falha ao entregar pedido de reserva");
-    throw new Error("Falha ao registar o pedido de reserva");
-  }
-}
-
-/**
- * Sem webhook configurado: regista apenas um aviso SEM dados pessoais.
- * Útil para testes; em produção configure RESERVATION_WEBHOOK_URL.
- */
-export class LogOnlyReservationSink implements ReservationSink {
-  constructor(private readonly log: Logger) {}
-  async submit(input: Omit<ReservationRequest, "request_id" | "created_at" | "status">) {
-    const request_id = randomUUID();
-    this.log.warn(
-      { request_id, call_sid: input.call_sid, check_in: input.check_in, check_out: input.check_out, room_type: input.room_type },
-      "pedido de reserva recebido mas RESERVATION_WEBHOOK_URL não está configurado (dados pessoais descartados)",
-    );
-    return { request_id };
+    return { request_id: id };
   }
 }

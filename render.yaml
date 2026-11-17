@@ -7,7 +7,7 @@ services:
     rootDir: resort-voice-agent
     dockerfilePath: ./Dockerfile
     region: frankfurt
-    plan: starter
+    plan: 0.5c-512mb       # antigo "Starter"
     numInstances: 1          # uma instância: o limite de chamadas simultâneas é contado em memória
     healthCheckPath: /healthz
     autoDeploy: true
@@ -39,5 +39,5 @@ databases:
   - name: atendia-db
     databaseName: atendia
     region: frankfurt
-    plan: basic-256mb
+    plan: 0.1c-256mb       # antigo "Basic-256mb"
     ipAllowList: []          # sem acesso externo: só o serviço web, pela rede interna

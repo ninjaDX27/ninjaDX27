@@ -15,6 +15,7 @@ export interface Tenant {
   pms_token_enc: string | null;
   max_concurrent_calls: number;
   monthly_minutes_limit: number;
+  profile_updated_at: Date | null;
   created_at: Date;
 }
 export interface User {
@@ -151,6 +152,8 @@ const MIGRATIONS: string[] = [
     detail text
   );
   `,
+  // 2: saber se o cliente já reviu o perfil (passo de onboarding).
+  `ALTER TABLE tenants ADD COLUMN profile_updated_at timestamptz;`,
 ];
 
 function toTenant(row: Record<string, unknown>): Tenant {
@@ -247,7 +250,7 @@ export class Store {
     }
   }
   async updateProfile(tenantId: string, profile: Resort): Promise<void> {
-    await this.q("UPDATE tenants SET profile = $2, name = $3 WHERE id = $1", [tenantId, JSON.stringify(profile), profile.name]);
+    await this.q("UPDATE tenants SET profile = $2, name = $3, profile_updated_at = now() WHERE id = $1", [tenantId, JSON.stringify(profile), profile.name]);
   }
   async updateReception(tenantId: string, phone: string | null): Promise<void> {
     await this.q("UPDATE tenants SET reception_phone = $2 WHERE id = $1", [tenantId, phone]);

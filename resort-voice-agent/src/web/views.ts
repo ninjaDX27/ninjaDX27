@@ -10,6 +10,16 @@ export function h(v: unknown): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+/** Formata números E.164 para leitura: +351 300 000 001. */
+export function phone(v: string | null | undefined): string {
+  if (!v) return "";
+  const pt = /^\+351(\d{3})(\d{3})(\d{3})$/.exec(v);
+  if (pt) return `+351 ${pt[1]} ${pt[2]} ${pt[3]}`;
+  const m = /^(\+\d{1,3})(\d+)$/.exec(v);
+  return m ? `${m[1]} ${m[2]!.replace(/(\d{3})(?=\d)/g, "$1 ")}` : v;
+}
+const LANG_LABEL: Record<string, string> = { "pt-PT": "Português", "en-GB": "Inglês", "es-ES": "Espanhol", "fr-FR": "Francês", "de-DE": "Alemão" };
+const langLabel = (c: string | null) => (c ? (LANG_LABEL[c] ?? c) : "–");
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? String(v) : "");
 
 export interface Flash {
@@ -273,9 +283,9 @@ export interface Stats {
 export function overviewPage(c: Ctx, t: Tenant, s: Stats, f: Flash): string {
   const pct = Math.min(100, Math.round((s.minutes / Math.max(1, t.monthly_minutes_limit)) * 100));
   const steps: Array<[boolean, string, string, string]> = [
-    [t.profile.name !== "Resort Exemplo Algarve", "Preencher os dados do resort", "Quartos, preços, políticas e perguntas frequentes.", "/app/resort"],
+    [!!t.profile_updated_at, "Preencher os dados do resort", "Quartos, preços, políticas e perguntas frequentes.", "/app/resort"],
     [!!t.reception_phone, "Indicar o telefone da receção", "Para onde o assistente transfere as chamadas.", "/app/resort"],
-    [!!t.twilio_number, "Número do assistente atribuído", t.twilio_number ? `O seu número é ${t.twilio_number}.` : "A nossa equipa atribui o número e avisa-o.", "/app"],
+    [!!t.twilio_number, "Número do assistente atribuído", t.twilio_number ? `O seu número é ${phone(t.twilio_number)}.` : "A nossa equipa atribui o número e avisa-o.", "/app"],
   ];
   const allDone = steps.every((x) => x[0]);
   return shell(
@@ -288,7 +298,7 @@ ${pct >= 90 ? `<div class="notice warn">Usou ${pct}% dos minutos deste mês. Ao 
   <div class="stat"><div class="k">Chamadas este mês</div><div class="v">${s.calls}</div><div class="s">${s.transferred} transferidas para a receção</div></div>
   <div class="stat"><div class="k">Pedidos de reserva</div><div class="v">${s.requests}</div><div class="s">${s.pending} por tratar</div></div>
   <div class="stat"><div class="k">Minutos usados</div><div class="v">${s.minutes}</div><div class="s">de ${t.monthly_minutes_limit} incluídos</div><div class="meter" role="img" aria-label="${pct}% dos minutos usados"><i style="width:${pct}%"></i></div></div>
-  <div class="stat"><div class="k">Número do assistente</div><div class="v" style="font-size:20px;padding-top:8px">${t.twilio_number ? h(t.twilio_number) : "Por atribuir"}</div><div class="s">${t.status === "active" ? "Ativo" : "Suspenso"}</div></div>
+  <div class="stat"><div class="k">Número do assistente</div><div class="v" style="font-size:20px;padding-top:8px">${t.twilio_number ? h(phone(t.twilio_number)) : "Por atribuir"}</div><div class="s">${t.status === "active" ? "Ativo" : "Suspenso"}</div></div>
 </div>
 ${
   allDone
@@ -311,7 +321,7 @@ export function callsPage(c: Ctx, calls: CallRow[]): string {
       : `<div class="table-wrap"><table><thead><tr><th>Data</th><th>Resultado</th><th>Idioma</th><th class="num">Duração</th><th class="num">Trocas</th></tr></thead><tbody>${calls
           .map((x) => {
             const [label, cls] = OUTCOME[x.outcome ?? ""] ?? ["Em curso", ""];
-            return `<tr><td>${h(dateTime.format(x.started_at))}</td><td><span class="badge ${cls}">${label}</span></td><td>${h(x.language ?? "–")}</td><td class="num">${duration(x.duration_s)}</td><td class="num">${x.turns ?? "–"}</td></tr>`;
+            return `<tr><td>${h(dateTime.format(x.started_at))}</td><td><span class="badge ${cls}">${label}</span></td><td>${h(langLabel(x.language))}</td><td class="num">${duration(x.duration_s)}</td><td class="num">${x.turns ?? "–"}</td></tr>`;
           })
           .join("")}</tbody></table></div><p class="hint">As chamadas não são gravadas. O número de quem liga não é guardado.</p>`;
   return shell(c, "Chamadas", "As últimas 100 chamadas atendidas pelo assistente.", body);
@@ -402,7 +412,7 @@ export function resortGeneralPage(c: Ctx, p: DraftProfile, reception: string, f:
   </div>
 </div>
 <div class="card"><h2>Receção</h2><p class="muted">Para onde o assistente transfere quando o hóspede pede para falar com alguém.</p>
-  <div class="field" style="max-width:320px"><label for="reception">Telefone da receção</label><input id="reception" type="tel" name="reception_phone" value="${h(reception)}" placeholder="+351210000000" required maxlength="16"><div class="hint">Formato internacional, com indicativo do país.</div></div>
+  <div class="field" style="max-width:320px"><label for="reception">Telefone da receção</label><input id="reception" type="tel" name="reception_phone" value="${h(reception)}" placeholder="ex.: +351 210 000 000" required maxlength="16"><div class="hint">Formato internacional, com indicativo do país.</div></div>
 </div>
 <div class="card"><h2>Regras de reserva</h2><p class="muted">O assistente recusa pedidos fora destes limites.</p>
   <div class="row">
@@ -420,11 +430,11 @@ function roomBlock(r: Partial<DraftRoom>): string {
   <div class="repeat-head"><strong>${r.name ? h(r.name) : "Novo quarto"}</strong><button class="btn small danger" type="button" data-remove>Remover</button></div>
   <input type="hidden" name="room_id" value="${h(r.id)}">
   <div class="row">
-    <div class="field"><label>Nome</label><input type="text" name="room_name" value="${h(r.name)}" maxlength="80" placeholder="Quarto Duplo Vista Mar"></div>
+    <div class="field"><label>Nome</label><input type="text" name="room_name" value="${h(r.name)}" maxlength="80" placeholder="ex.: Quarto Duplo Vista Mar"></div>
     <div class="field"><label>Preço desde (por noite)</label><input type="number" name="room_rate" value="${num(r.nightly_rate_from)}" min="1" step="0.01"></div>
     <div class="field"><label>Unidades</label><input type="number" name="room_units" value="${num(r.units ?? 1)}" min="0" max="999"></div>
   </div>
-  <div class="field"><label>Descrição</label><input type="text" name="room_description" value="${h(r.description)}" maxlength="300" placeholder="Cama de casal, varanda com vista mar, 30 metros quadrados."></div>
+  <div class="field"><label>Descrição</label><input type="text" name="room_description" value="${h(r.description)}" maxlength="300" placeholder="ex.: Cama de casal, varanda com vista mar, 30 metros quadrados."></div>
   <div class="row">
     <div class="field"><label>Máx. adultos</label><input type="number" name="room_adults" value="${num(r.max_adults ?? 2)}" min="1" max="20"></div>
     <div class="field"><label>Máx. crianças</label><input type="number" name="room_children" value="${num(r.max_children ?? 0)}" min="0" max="20"></div>
@@ -449,7 +459,7 @@ export function resortRoomsPage(c: Ctx, p: DraftProfile, f: Flash): string {
 
 function pairBlock(kind: "policy" | "faq", a = "", b = ""): string {
   const [la, lb, pa, pb] =
-    kind === "policy" ? ["Tema", "O que o assistente deve dizer", "Check-in", "a partir das 15h00"] : ["Pergunta", "Resposta", "Têm transfer do aeroporto?", "Sim, a pedido, a partir de 45 euros por trajeto."];
+    kind === "policy" ? ["Tema", "O que o assistente deve dizer", "ex.: Check-in", "ex.: a partir das 15h00"] : ["Pergunta", "Resposta", "ex.: Têm transfer do aeroporto?", "ex.: Sim, a pedido, a partir de 45 euros por trajeto."];
   return `<div class="repeat"><div class="row" style="grid-template-columns:minmax(140px,1fr) 2fr auto;align-items:end">
   <div class="field" style="margin:0"><label>${la}</label><input type="text" name="${kind}_a" value="${h(a)}" maxlength="${kind === "policy" ? 60 : 200}" placeholder="${pa}"></div>
   <div class="field" style="margin:0"><label>${lb}</label><input type="text" name="${kind}_b" value="${h(b)}" maxlength="500" placeholder="${pb}"></div>
@@ -550,7 +560,7 @@ export function adminTenantsPage(c: Ctx, tenants: Array<Tenant & { minutes_used:
       : `<div class="table-wrap"><table><thead><tr><th>Resort</th><th>Número</th><th>Conta</th><th class="num">Minutos (mês)</th><th>Estado</th></tr></thead><tbody>${tenants
           .map(
             (t) =>
-              `<tr><td><a href="/admin/clientes/${h(t.id)}"><strong>${h(t.name)}</strong></a></td><td>${t.twilio_number ? h(t.twilio_number) : `<span class="badge warn">Por atribuir</span>`}</td><td>${h(t.owner_email ?? "–")}</td><td class="num">${t.minutes_used} / ${t.monthly_minutes_limit}</td><td><span class="badge ${t.status === "active" ? "ok" : "danger"}">${t.status === "active" ? "Ativo" : "Suspenso"}</span></td></tr>`,
+              `<tr><td><a href="/admin/clientes/${h(t.id)}"><strong>${h(t.name)}</strong></a></td><td style="white-space:nowrap">${t.twilio_number ? h(phone(t.twilio_number)) : `<span class="badge warn">Por atribuir</span>`}</td><td>${h(t.owner_email ?? "–")}</td><td class="num">${t.minutes_used} / ${t.monthly_minutes_limit}</td><td><span class="badge ${t.status === "active" ? "ok" : "danger"}">${t.status === "active" ? "Ativo" : "Suspenso"}</span></td></tr>`,
           )
           .join("")}</tbody></table></div>`;
   return shell(c, "Clientes", "Resorts que usam o serviço.", body, f, `<a class="btn" href="/admin/clientes/novo">Novo cliente</a>`);
@@ -580,7 +590,7 @@ ${tempPassword ? `<div class="card"><h2>Palavra-passe temporária</h2><p class="
 <form method="post" action="/admin/clientes/${h(t.id)}" class="card">${csrfField(c)}
   <h2>Serviço</h2><p class="muted">Número, limites do plano e estado.</p>
   <div class="row">
-    <div class="field"><label for="num">Número Twilio</label><input id="num" type="tel" name="twilio_number" value="${h(t.twilio_number)}" placeholder="+351300000000" maxlength="16"><div class="hint">Formato internacional. Deixe vazio para desligar.</div></div>
+    <div class="field"><label for="num">Número Twilio</label><input id="num" type="tel" name="twilio_number" value="${h(t.twilio_number)}" placeholder="ex.: +351 300 000 000" maxlength="16"><div class="hint">Formato internacional. Deixe vazio para desligar.</div></div>
     <div class="field"><label for="st">Estado</label><select id="st" name="status"><option value="active"${t.status === "active" ? " selected" : ""}>Ativo</option><option value="suspended"${t.status === "suspended" ? " selected" : ""}>Suspenso</option></select></div>
   </div>
   <div class="row">

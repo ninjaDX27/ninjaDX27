@@ -1,139 +1,110 @@
-# Agente de voz com IA para resorts
+# Atendia
 
-Assistente telefónico 24/7 para hotéis e resorts. Atende em português de Portugal (e em inglês, espanhol e francês), responde a perguntas, verifica disponibilidade, regista pedidos de reserva e transfere para a receção quando é preciso.
+Assistente telefónico com IA para hotéis e resorts, vendido como SaaS: um só serviço atende vários resorts, cada um com o seu número, perfil, painel e limites de plano.
 
-**Stack:** Node.js 22 + TypeScript, [Twilio ConversationRelay](https://www.twilio.com/docs/voice/conversationrelay) para a voz (reconhecimento, síntese e interrupções), Claude (`claude-opus-5-5`) para a conversa, e Docker para o deploy.
-
-```
-Cliente ──telefone──▶ Twilio ──POST /voice (assinado)──▶ este serviço ──▶ TwiML <ConversationRelay>
-                        │                                      ▲
-                        └──── WebSocket wss://…/relay/<token> ─┘  ◀── texto ⇄ Claude (streaming + ferramentas)
-                                                               │
-                         POST /handoff ◀── fim da sessão ──────┘  ──▶ <Dial> receção  |  <Hangup>
-```
-
-## O que o agente faz
-
-| Ferramenta | O que faz |
+| Para quem | O que tem |
 |---|---|
-| `check_availability` | Preço e disponibilidade a partir do ficheiro do resort (`static`, preços indicativos) ou da API do PMS (`http`) |
-| `create_reservation_request` | Regista um **pedido** (não uma reserva confirmada) e envia-o para o seu CRM, n8n ou PMS por webhook assinado |
-| `transfer_to_human` | Transfere a chamada para a receção (`RECEPTION_PHONE_NUMBER`) |
-| `end_call` | Despede-se e desliga |
-| `switch_language` | Muda o reconhecimento e a voz para outro idioma configurado |
+| Hóspede | Atendimento 24/7 em 5 idiomas, respostas com os dados do resort, pedido de reserva, transferência para a receção (ou tecla 0) |
+| Resort (cliente) | Painel: chamadas, minutos usados, pedidos de reserva, edição de quartos, políticas, FAQ e idiomas, webhook e ligação ao PMS |
+| Você (plataforma) | Administração: criar clientes, atribuir números, limites de minutos, suspender, repor acessos, pedidos de demonstração do site |
+| Público | Site de vendas com formulário de demonstração e política de privacidade |
 
-O cliente também pode carregar na **tecla 0** para falar com a receção a qualquer momento.
+**Stack:** Node.js 22, TypeScript, Postgres, Twilio ConversationRelay (voz) e Claude `claude-opus-5-5` (conversa). Sem frameworks de frontend: HTML do servidor, CSS próprio e 60 linhas de JavaScript opcional.
 
-## Segurança incluída
+- O guia de deploy está abaixo.
+- O kit comercial está em [`docs/vendas/`](docs/vendas/).
 
-| Área | Medida |
-|---|---|
-| Autenticidade | Valida `X-Twilio-Signature` em `/voice`, `/handoff` e no upgrade do WebSocket. Em produção, a validação não pode ser desligada (o arranque falha). |
-| Sessões | Token HMAC por chamada, de uso único, com validade de 2 min, no caminho do WebSocket. O `CallSid` do `setup` tem de corresponder ao token. |
-| Pagamentos (PCI) | O agente nunca pede nem aceita dados de cartão, IBAN ou documentos. O pagamento é feito por link seguro enviado pela equipa. |
-| Ações com efeito | A reserva fica sempre como pedido pendente e exige confirmação e consentimento explícitos (`const: true`, validados no servidor). Há limites por chamada: 10 pesquisas e 2 pedidos. |
-| Prompt injection | As regras estão fixas no prompt de sistema. Todos os inputs das ferramentas são validados com Zod (`.strict()`, enums, intervalos, datas reais) e os textos livres são limpos de caracteres de controlo e `<>`. O modelo não tem acesso a segredos nem a dados de outros hóspedes. |
-| RGPD | A saudação diz que o atendente é IA e que a chamada não é gravada. As transcrições não são guardadas (só existem em memória durante a chamada). Os logs não têm dados pessoais: o número do cliente fica como hash, com redação automática de nome, e-mail, telefone e falas. O consentimento fica registado no pedido. |
-| Webhooks de saída | HMAC-SHA256 sobre `timestamp.body`, `Idempotency-Key`, timeout, 3 tentativas e `redirect: "error"`. |
-| PMS | Bearer token, timeout de 5 s, resposta validada por esquema, tamanho limitado e sem redirects. |
-| Abuso e DoS | Rate limit HTTP, limite de chamadas simultâneas (acima dele a chamada vai para a receção), duração máxima, nº máximo de turnos, tamanho máximo das falas, `maxPayload` de 64 KB e 50 mensagens/s por WebSocket, e heartbeat. |
-| Falhas | Se o modelo falhar, recusar ou exceder o tempo, ou se a sessão cair, o cliente é transferido para a receção e nunca fica abandonado. Há fallback do lado do servidor em caso de recusa do modelo (`server-side-fallback`). |
-| HTTP | `helmet` (cabeçalhos de segurança, CSP `default-src 'none'`), sem `x-powered-by`, limites de body e timeouts. |
-| Configuração | Tudo é validado no arranque com Zod. As mensagens de erro nunca mostram os valores dos segredos. |
-| Contentor | Imagem distroless, utilizador `nonroot`, filesystem só de leitura, `cap_drop: ALL`, `no-new-privileges`, limites de memória e PIDs. |
+---
 
-## 1. Configurar o resort
+## Deploy no Render (cerca de 30 minutos)
 
-```bash
-cp config/resort.example.json config/resort.json
-```
+### 1. Criar as contas
 
-Edite `config/resort.json` com os quartos, preços, políticas, FAQ e saudações. O agente **só** responde com o que está neste ficheiro. Mantenha nas saudações a indicação de que o atendente é IA (transparência exigida pelo AI Act da UE). Se quiser escolher vozes específicas, defina `voice` em cada idioma, usando a lista de vozes do Twilio ConversationRelay.
+| Conta | Onde | Para quê |
+|---|---|---|
+| GitHub | já tem | o Render faz deploy a partir do repositório |
+| Render | render.com | alojamento (servidor e base de dados em Frankfurt) |
+| Anthropic | console.anthropic.com | o modelo que conduz a conversa. Ative a faturação e defina um limite de gasto mensal |
+| Twilio | twilio.com | números de telefone e voz. Faça o upgrade da conta trial e aceite os termos de IA (Predictive and Generative AI) para usar o ConversationRelay |
 
-## 2. Variáveis de ambiente
+> Os números portugueses no Twilio exigem um *Regulatory Bundle* (comprovativo de morada/empresa). Trate disto cedo, porque a aprovação pode demorar alguns dias.
 
-```bash
-cp .env.example .env
-```
-
-Gere os segredos com:
+### 2. Gerar as chaves (no seu computador)
 
 ```bash
 openssl rand -hex 32
 ```
 
-As variáveis obrigatórias são `PUBLIC_BASE_URL`, `ANTHROPIC_API_KEY`, `TWILIO_AUTH_TOKEN`, `SESSION_SIGNING_SECRET` e `RECEPTION_PHONE_NUMBER`. Para os pedidos de reserva chegarem a algum lado, configure também `RESERVATION_WEBHOOK_URL` e `RESERVATION_WEBHOOK_SECRET`.
+Corra o comando **duas vezes**: o primeiro resultado é a `MASTER_ENCRYPTION_KEY` e o segundo fica de reserva. Guarde a `MASTER_ENCRYPTION_KEY` num gestor de passwords. **Se a perder, os dados cifrados dos clientes ficam ilegíveis.**
 
-> `PUBLIC_BASE_URL` tem de ser **exatamente** o URL HTTPS que o Twilio chama. Caso contrário, a validação de assinatura falha e devolve 403.
+### 3. Criar o serviço no Render
 
-## 3. Deploy
+1. Render → **New** → **Blueprint** → escolha o repositório. O Render lê o `render.yaml` e cria o serviço `atendia` e a base de dados `atendia-db` em Frankfurt.
+2. Preencha as variáveis pedidas:
+   - `PUBLIC_BASE_URL`: `https://atendia.onrender.com`. Confirme o URL final depois de criado e corrija se for diferente.
+   - `MASTER_ENCRYPTION_KEY`: a chave do passo 2.
+   - `ADMIN_EMAIL`: o seu e-mail.
+   - `CONTACT_EMAIL`: o e-mail público de contacto.
+   - `ANTHROPIC_API_KEY` e `TWILIO_AUTH_TOKEN`: as chaves das respetivas contas.
+3. Espere pelo primeiro deploy e abra **Logs**. Vai encontrar um bloco com a **palavra-passe temporária** do administrador.
+4. Abra `https://<o-seu-url>/login`, entre e defina a sua palavra-passe.
 
-O serviço precisa de HTTPS público com suporte a WebSockets.
+Em `/healthz` deve ver `{"status":"ok"}`.
 
-**Docker (VPS com Caddy ou Nginx à frente):**
+### 4. Domínio próprio (recomendado)
+
+No Render, em Settings → Custom Domains, adicione por exemplo `app.atendia.pt` e configure o DNS como indicado. Depois **atualize `PUBLIC_BASE_URL`** e os webhooks no Twilio para o novo domínio.
+
+### 5. Ligar um resort
+
+1. Em **Administração → Novo cliente**, crie o resort. Copie a palavra-passe temporária e envie-a ao cliente por um canal seguro.
+2. No Twilio, compre um número e, em Voice Configuration → *A call comes in*, escolha Webhook, `POST`, com o URL mostrado na ficha do cliente (`https://<o-seu-url>/voice`). É o mesmo URL para todos os números.
+3. Na ficha do cliente, indique o número no campo **Número Twilio**.
+4. O cliente entra, preenche o resort (quartos, políticas, receção) e liga para o número para testar.
+
+---
+
+## Alternativa: servidor próprio
 
 ```bash
+cp .env.example .env    # preencha, incluindo POSTGRES_PASSWORD
 docker compose up -d --build
 ```
 
-O `docker-compose.yml` expõe a porta 8080 só em `127.0.0.1`. Use um reverse proxy com TLS à frente. O Caddy faz isto numa linha: `voice.seudominio.pt { reverse_proxy 127.0.0.1:8080 }`.
-
-**PaaS (Render, Railway, Fly.io, Cloud Run):** use o `Dockerfile` e defina as variáveis de ambiente no painel. Monte o `config/resort.json` como ficheiro ou secret, ou inclua-o na imagem. Health check: `GET /healthz`. Em Cloud Run, aumente o request timeout para 3600 s (para os WebSockets).
-
-## 4. Ligar ao Twilio
-
-1. Compre ou porte um número português no Twilio Console.
-2. Ative as funcionalidades de IA na conta, se pedido. O ConversationRelay exige aceitar os termos de *Predictive and Generative AI* no Console.
-3. No número, em **Voice Configuration**, escolha **A call comes in** → Webhook → `POST https://voice.seudominio.pt/voice`.
-4. Ligue para o número e teste.
-
-## 5. Receber os pedidos de reserva (verificar a assinatura)
-
-```js
-import { createHmac, timingSafeEqual } from "node:crypto";
-function verify(rawBody, headers, secret) {
-  const ts = headers["x-timestamp"];
-  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false; // anti-replay
-  const expected = "sha256=" + createHmac("sha256", secret).update(`${ts}.${rawBody}`).digest("hex");
-  const given = String(headers["x-signature"] ?? "");
-  return given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected));
-}
-```
-
-Use o cabeçalho `Idempotency-Key` para ignorar entregas duplicadas.
-
-## 6. Ligar ao PMS (opcional)
-
-Com `AVAILABILITY_PROVIDER=http`, o serviço chama:
+A aplicação fica em `127.0.0.1:8080`. Ponha à frente um proxy HTTPS com suporte a WebSockets. Com o Caddy basta uma linha:
 
 ```
-GET {PMS_API_URL}/availability?check_in=AAAA-MM-DD&check_out=AAAA-MM-DD&adults=2&children=0
-Authorization: Bearer {PMS_API_TOKEN}
-
-→ { "rooms": [ { "room_type": "duplo_mar", "available_units": 3, "total_price": 480, "currency": "EUR" } ] }
+app.atendia.pt { reverse_proxy 127.0.0.1:8080 }
 ```
 
-Os `room_type` têm de corresponder aos `id` do `resort.json`. Se o seu PMS tiver outro formato, crie um pequeno adaptador (por exemplo, em n8n) que devolva este contrato.
+---
+
+## Segurança
+
+| Área | Medida |
+|---|---|
+| Chamadas | Assinatura Twilio validada em `/voice`, `/handoff` e no WebSocket. Token por chamada, de uso único e com 2 minutos de validade, ligado ao cliente. O CallSid tem de corresponder. |
+| Isolamento entre clientes | O cliente é identificado pela sessão, nunca pelo pedido. Todas as consultas filtram por `tenant_id`, e há testes que tentam aceder a dados de outro resort. |
+| Contas | Palavras-passe com scrypt e sal. Mínimo de 12 caracteres. Bloqueio de 15 minutos após 8 falhas. Mensagem de erro igual quer o e-mail exista ou não. Palavra-passe temporária com alteração obrigatória. Mudar a palavra-passe termina as outras sessões. |
+| Sessões web | Cookie `__Host-` com `HttpOnly`, `Secure` e `SameSite=Lax`, validade de 12 h e só o hash guardado na base de dados. CSRF com token por sessão e verificação de origem. |
+| Dados pessoais | Nomes e contactos dos pedidos cifrados com AES-256-GCM. Números de quem liga pseudonimizados com HMAC. Chamadas não gravadas e transcrições não guardadas. Retenção automática (90 dias, configurável). Logs sem dados pessoais. |
+| Segredos dos clientes | Segredo do webhook e token do PMS cifrados. O segredo é mostrado uma só vez e o token do PMS nunca é mostrado. |
+| SSRF | Os URLs de webhook e PMS só aceitam HTTPS para IPs públicos. Redes privadas, loopback e metadados da cloud são recusados no momento de guardar e no momento de chamar. |
+| Web | CSP `default-src 'none'`, sem scripts inline e todo o HTML escapado. HSTS, `frame-ancestors 'none'` e rate limiting no login, no formulário do site e global. |
+| Agente | Nunca aceita dados de cartão. As reservas ficam como pedidos que exigem confirmação e consentimento. Há limites por chamada. Em caso de erro ou recusa do modelo, a chamada vai para a receção. Ao atingir o limite de minutos do plano, as chamadas vão diretamente para a receção. |
+| Contentor | Imagem distroless, utilizador não-root, filesystem só de leitura e `cap_drop: ALL`. |
 
 ## Desenvolvimento
 
+É preciso um Postgres local (por omissão `postgres://postgres@127.0.0.1:54329/voice_test`, ou defina `TEST_DATABASE_URL`).
+
 ```bash
 npm ci
-npm run check   # typecheck + 34 testes (sem rede: Twilio e Claude simulados)
-npm run dev     # com .env carregado; use um túnel HTTPS (ex.: cloudflared) e defina PUBLIC_BASE_URL
+npm run check   # tipos + 52 testes (voz, painel, admin, isolamento, CSRF, SSRF, cifra, retenção)
 ```
 
-## Custos e latência
+## Limitações conhecidas
 
-- O modelo predefinido é `claude-opus-5-5` com `effort: low`, para dar respostas rápidas ao telefone. O prompt de sistema e as ferramentas ficam em cache (prompt caching), o que reduz o custo dos turnos seguintes.
-- As respostas são enviadas ao Twilio token a token, por isso a voz começa antes de a resposta estar completa.
-- Se quiser menos custo ou latência, pode testar `CLAUDE_MODEL=claude-sonnet-5-5` e comparar a qualidade com chamadas reais.
-
-## Antes de ir para produção
-
-- [ ] Rever o `resort.json` (preços, políticas) e as saudações em todos os idiomas.
-- [ ] Configurar o webhook de reservas e confirmar que os pedidos chegam.
-- [ ] Fazer chamadas de teste em cada idioma: reserva, FAQ, transferência, tecla 0 e pedido fora de âmbito.
-- [ ] Validar com o DPO/jurídico o texto de transparência (RGPD e AI Act) e a política de privacidade.
-- [ ] Monitorizar os logs (`assinatura Twilio inválida`, `erro no modelo`, `capacidade máxima`).
-- [ ] Definir alertas de custo na Anthropic Console e no Twilio.
+- **Uma instância.** O limite de chamadas simultâneas é contado em memória. Para várias instâncias, seria preciso um contador partilhado (Redis).
+- **Faturação manual.** Os minutos ficam registados por cliente e por mês, mas não há cobrança automática. Fature a partir do painel de administração ou integre o Stripe mais tarde.
+- **Falta testar com chamadas reais.** Twilio e Claude são simulados nos testes automáticos. Faça chamadas de teste antes do primeiro cliente.

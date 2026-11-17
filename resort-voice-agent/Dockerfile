@@ -13,8 +13,8 @@ ENV NODE_ENV=production
 COPY --from=build --chown=nonroot:nonroot /app/node_modules ./node_modules
 COPY --from=build --chown=nonroot:nonroot /app/dist ./dist
 COPY --chown=nonroot:nonroot package.json ./
+COPY --chown=nonroot:nonroot public ./public
 COPY --chown=nonroot:nonroot config/resort.example.json ./config/resort.example.json
 USER nonroot
 EXPOSE 8080
-# O perfil do resort é montado em runtime: -v ./config/resort.json:/app/config/resort.json:ro
 CMD ["dist/index.js"]

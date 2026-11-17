@@ -1,4 +1,4 @@
-import pg from "pg";
+import type { Db } from "./driver.js";
 import { ResortSchema, type Resort } from "../resort.js";
 
 export type TenantStatus = "active" | "suspended";
@@ -161,52 +161,31 @@ function toTenant(row: Record<string, unknown>): Tenant {
 }
 
 export class Store {
-  readonly pool: pg.Pool;
+  constructor(readonly db: Db) {}
 
-  constructor(databaseUrl: string, ssl: boolean) {
-    this.pool = new pg.Pool({
-      connectionString: databaseUrl,
-      max: 10,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
-      statement_timeout: 10_000,
-      ...(ssl ? { ssl: { rejectUnauthorized: false } } : {}),
-    });
+  private async q<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
+    return (await this.db.query<T>(text, params)).rows;
   }
 
-  private async q<T extends pg.QueryResultRow = pg.QueryResultRow>(text: string, params: unknown[] = []): Promise<T[]> {
-    return (await this.pool.query<T>(text, params)).rows;
-  }
-
+  /** Aplica as migrações em falta. O lock transacional evita corridas entre instâncias. */
   async migrate(): Promise<void> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("SELECT pg_advisory_lock(727274)");
-      await client.query("CREATE TABLE IF NOT EXISTS schema_migrations (version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())");
-      const done = new Set((await client.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version));
-      for (const [i, sql] of MIGRATIONS.entries()) {
-        if (done.has(i + 1)) continue;
-        await client.query("BEGIN");
-        try {
-          await client.query(sql);
-          await client.query("INSERT INTO schema_migrations (version) VALUES ($1)", [i + 1]);
-          await client.query("COMMIT");
-        } catch (err) {
-          await client.query("ROLLBACK");
-          throw err;
-        }
-      }
-    } finally {
-      await client.query("SELECT pg_advisory_unlock(727274)").catch(() => undefined);
-      client.release();
+    await this.db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())");
+    for (const [i, sql] of MIGRATIONS.entries()) {
+      await this.db.transaction(async (tx) => {
+        await tx.query("SELECT pg_advisory_xact_lock(727274)");
+        const done = await tx.query("SELECT 1 FROM schema_migrations WHERE version = $1", [i + 1]);
+        if (done.rows.length > 0) return;
+        await tx.exec(sql);
+        await tx.query("INSERT INTO schema_migrations (version) VALUES ($1)", [i + 1]);
+      });
     }
   }
 
   async ping(): Promise<void> {
-    await this.pool.query("SELECT 1");
+    await this.db.query("SELECT 1");
   }
   async close(): Promise<void> {
-    await this.pool.end();
+    await this.db.close();
   }
 
   // ---------- Tenants ----------
@@ -229,25 +208,16 @@ export class Store {
   }
   /** Cria o cliente e o utilizador dono numa transação. */
   async createTenantWithOwner(name: string, profile: Resort, email: string, passwordHash: string): Promise<string> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-      const t = await client.query<{ id: string }>("INSERT INTO tenants (name, profile) VALUES ($1, $2) RETURNING id", [
-        name,
-        JSON.stringify(profile),
+    return this.db.transaction(async (tx) => {
+      const t = await tx.query<{ id: string }>("INSERT INTO tenants (name, profile) VALUES ($1, $2) RETURNING id", [name, JSON.stringify(profile)]);
+      const id = t.rows[0]!.id;
+      await tx.query("INSERT INTO users (tenant_id, email, password_hash, role, must_change_password) VALUES ($1, $2, $3, 'owner', true)", [
+        id,
+        email,
+        passwordHash,
       ]);
-      await client.query(
-        "INSERT INTO users (tenant_id, email, password_hash, role, must_change_password) VALUES ($1, $2, $3, 'owner', true)",
-        [t.rows[0]!.id, email, passwordHash],
-      );
-      await client.query("COMMIT");
-      return t.rows[0]!.id;
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
+      return id;
+    });
   }
   async updateProfile(tenantId: string, profile: Resort): Promise<void> {
     await this.q("UPDATE tenants SET profile = $2, name = $3, profile_updated_at = now() WHERE id = $1", [tenantId, JSON.stringify(profile), profile.name]);
@@ -374,8 +344,8 @@ export class Store {
   }
   /** O tenant_id na condição impede alterar pedidos de outro cliente. */
   async setReservationStatus(tenantId: string, id: string, status: "pending" | "confirmed" | "declined"): Promise<boolean> {
-    const r = await this.pool.query("UPDATE reservation_requests SET status=$3 WHERE id=$2 AND tenant_id=$1", [tenantId, id, status]);
-    return (r.rowCount ?? 0) > 0;
+    const r = await this.db.query("UPDATE reservation_requests SET status=$3 WHERE id=$2 AND tenant_id=$1", [tenantId, id, status]);
+    return r.rowCount > 0;
   }
 
   // ---------- Leads, auditoria, retenção ----------
@@ -392,13 +362,13 @@ export class Store {
   }
   /** RGPD: apaga dados pessoais antigos. Devolve o nº de pedidos anonimizados. */
   async purge(retentionDays: number): Promise<number> {
-    const r = await this.pool.query(
+    const r = await this.db.query(
       "UPDATE reservation_requests SET pii_enc = NULL WHERE pii_enc IS NOT NULL AND created_at < now() - make_interval(days => $1)",
       [retentionDays],
     );
     await this.q("DELETE FROM web_sessions WHERE expires_at < now()");
     await this.q("DELETE FROM leads WHERE created_at < now() - interval '365 days'");
     await this.q("DELETE FROM audit_log WHERE at < now() - interval '365 days'");
-    return r.rowCount ?? 0;
+    return r.rowCount;
   }
 }

@@ -6,12 +6,6 @@ import { z } from "zod";
  */
 const bool = z.enum(["true", "false", "1", "0"]).transform((v) => v === "true" || v === "1");
 
-const httpsUrl = z
-  .string()
-  .url()
-  .refine((u) => u.startsWith("https://"), "tem de começar por https://")
-  .transform((u) => u.replace(/\/+$/, ""));
-
 const EnvSchema = z
   .object({
     NODE_ENV: z.enum(["development", "production", "test"]).default("production"),
@@ -23,10 +17,21 @@ const EnvSchema = z
     /** E-mail de contacto mostrado no site e na política de privacidade. */
     CONTACT_EMAIL: z.string().email().optional(),
 
-    /** URL público HTTPS do serviço (sem barra final). */
-    PUBLIC_BASE_URL: httpsUrl,
+    /** Versão para PC: base de dados embutida, acesso só em localhost. */
+    DESKTOP_MODE: bool.default(false),
 
-    DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, "tem de ser um URL postgres://"),
+    /** URL público HTTPS do serviço (sem barra final). Na versão PC pode ser http://localhost. */
+    PUBLIC_BASE_URL: z
+      .string()
+      .url()
+      .transform((u) => u.replace(/\/+$/, "")),
+    /** Origens adicionais aceites nos formulários (ex.: http://localhost:8080 na versão PC com túnel). */
+    EXTRA_ORIGINS: z
+      .string()
+      .default("")
+      .transform((s) => s.split(",").map((x) => x.trim().replace(/\/+$/, "")).filter(Boolean)),
+
+    DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, "tem de ser um URL postgres://").optional(),
     DATABASE_SSL: bool.default(false),
 
     /** 64 caracteres hex (openssl rand -hex 32). Cifra dados pessoais e segredos em repouso. */
@@ -43,7 +48,8 @@ const EnvSchema = z
     CLAUDE_EFFORT: z.enum(["low", "medium", "high"]).default("low"),
     CLAUDE_REFUSAL_FALLBACK: bool.default(true),
 
-    TWILIO_AUTH_TOKEN: z.string().min(16),
+    /** Opcional só na versão PC (sem Twilio, usa-se a chamada de teste no browser). */
+    TWILIO_AUTH_TOKEN: z.string().min(16).optional(),
     TWILIO_VALIDATE_SIGNATURE: bool.default(true),
 
     /** Limite global de chamadas simultâneas nesta instância. */
@@ -59,6 +65,16 @@ const EnvSchema = z
     TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(1),
   })
   .superRefine((env, ctx) => {
+    const local = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(env.PUBLIC_BASE_URL);
+    if (!env.PUBLIC_BASE_URL.startsWith("https://") && !(env.DESKTOP_MODE && local)) {
+      ctx.addIssue({ code: "custom", path: ["PUBLIC_BASE_URL"], message: "tem de começar por https://" });
+    }
+    if (!env.DESKTOP_MODE && !env.DATABASE_URL) {
+      ctx.addIssue({ code: "custom", path: ["DATABASE_URL"], message: "obrigatório" });
+    }
+    if (!env.DESKTOP_MODE && !env.TWILIO_AUTH_TOKEN) {
+      ctx.addIssue({ code: "custom", path: ["TWILIO_AUTH_TOKEN"], message: "obrigatório" });
+    }
     if (env.NODE_ENV === "production" && !env.TWILIO_VALIDATE_SIGNATURE) {
       ctx.addIssue({
         code: "custom",

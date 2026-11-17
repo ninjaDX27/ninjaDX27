@@ -151,3 +151,30 @@ ${resort.facilities.map((f) => `- ${f}`).join("\n")}
 ## Perguntas frequentes
 ${faq}`;
 }
+
+/** Saudações por omissão. Identificam o assistente como IA (obrigação de transparência). */
+export const LANGUAGE_DEFAULTS: Array<{ code: string; label: string; greeting: (name: string) => string }> = [
+  { code: "pt-PT", label: "Português", greeting: (n) => `Olá, obrigado por ligar para o ${n}. Fala com o assistente virtual, um sistema de inteligência artificial. Esta chamada não é gravada. Pode pedir a qualquer momento para falar com a receção, ou marcar zero. Em que posso ajudar?` },
+  { code: "en-GB", label: "English", greeting: (n) => `Hello, thank you for calling ${n}. You are speaking with a virtual assistant powered by artificial intelligence. This call is not recorded. You can ask for reception at any time or press zero. How can I help?` },
+  { code: "es-ES", label: "Español", greeting: (n) => `Hola, gracias por llamar a ${n}. Habla con un asistente virtual de inteligencia artificial. Esta llamada no se graba. Puede pedir hablar con recepción o pulsar cero. ¿En qué puedo ayudarle?` },
+  { code: "fr-FR", label: "Français", greeting: (n) => `Bonjour, merci d'appeler ${n}. Vous parlez avec un assistant virtuel doté d'intelligence artificielle. Cet appel n'est pas enregistré. Vous pouvez demander la réception ou appuyer sur zéro. Comment puis-je vous aider ?` },
+  { code: "de-DE", label: "Deutsch", greeting: (n) => `Guten Tag, vielen Dank für Ihren Anruf bei ${n}. Sie sprechen mit einem virtuellen Assistenten mit künstlicher Intelligenz. Dieser Anruf wird nicht aufgezeichnet. Sie können jederzeit die Rezeption verlangen oder die Null drücken. Wie kann ich Ihnen helfen?` },
+];
+
+/** Perfil inicial de um novo cliente: o exemplo, com o nome e saudações certas. */
+export function newTenantProfile(template: Resort, name: string): Resort {
+  return {
+    ...template,
+    name,
+    languages: template.languages.map((l) => {
+      const d = LANGUAGE_DEFAULTS.find((x) => x.code === l.code);
+      return d ? { ...l, welcomeGreeting: d.greeting(name).slice(0, 400) } : l;
+    }),
+  };
+}
+
+/** Ao mudar o nome do resort, atualiza-o também nas saudações que o mencionam. */
+export function renameInGreetings(languages: Resort["languages"], oldName: string, newName: string): Resort["languages"] {
+  if (!oldName || oldName === newName) return languages;
+  return languages.map((l) => ({ ...l, welcomeGreeting: l.welcomeGreeting.split(oldName).join(newName).slice(0, 400) }));
+}

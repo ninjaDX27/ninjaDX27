@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { anthropicStreamFactory } from "./agent.js";
 import { loadConfig } from "./config.js";
 import { Crypto, hashPassword, temporaryPassword } from "./crypto.js";
+import { PgDb } from "./db/driver.js";
 import { Store } from "./db/store.js";
 import { createLogger } from "./logger.js";
 import { loadResort } from "./resort.js";
@@ -13,7 +14,7 @@ async function main(): Promise<void> {
   const crypto = new Crypto(config.MASTER_ENCRYPTION_KEY);
   const resortTemplate = loadResort("config/resort.example.json");
 
-  const store = new Store(config.DATABASE_URL, config.DATABASE_SSL);
+  const store = new Store(new PgDb(config.DATABASE_URL!, config.DATABASE_SSL));
   await store.migrate();
 
   // Primeiro arranque: cria a conta de administrador da plataforma.

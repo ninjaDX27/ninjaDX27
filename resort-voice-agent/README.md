@@ -64,6 +64,14 @@ No Render, em Settings → Custom Domains, adicione por exemplo `app.atendia.pt`
 
 ---
 
+## Versão para PC (Windows): demonstrações
+
+Um único `Atendia.exe` com a base de dados incluída. Abre o painel no browser e permite **testar o assistente pelo microfone**, sem Twilio. Serve para demonstrações; para clientes reais, use o deploy no servidor.
+
+- **Download:** GitHub → Actions → último *resort-voice-agent* → artefacto **Atendia-Windows**.
+- **Gerar à mão:** `node scripts/build-desktop.mjs win --with-cloudflared`, que cria `build/desktop/win/`.
+- **Instruções para o utilizador:** [`docs/LEIA-ME-PC.txt`](docs/LEIA-ME-PC.txt).
+
 ## Alternativa: servidor próprio
 
 ```bash

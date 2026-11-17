@@ -226,6 +226,7 @@ export function loginPage(brand: string, f: Flash, email = ""): string {
 
 const OWNER_NAV: Array<[string, string]> = [
   ["/app", "Visão geral"],
+  ["/app/testar", "Testar o assistente"],
   ["/app/reservas", "Pedidos de reserva"],
   ["/app/chamadas", "Chamadas"],
 ];
@@ -234,7 +235,7 @@ const OWNER_CONFIG: Array<[string, string]> = [
   ["/app/integracoes", "Integrações"],
 ];
 
-function shell(c: Ctx, title: string, intro: string, body: string, f: Flash = {}, headAction = ""): string {
+function shell(c: Ctx, title: string, intro: string, body: string, f: Flash = {}, headAction = "", extraScript = ""): string {
   const link = ([href, label]: [string, string]) => {
     const current = href === "/app" || href === "/admin" ? c.path === href : c.path.startsWith(href);
     return `<a class="nav" href="${href}"${current ? ' aria-current="page"' : ""}>${h(label)}</a>`;
@@ -246,7 +247,7 @@ function shell(c: Ctx, title: string, intro: string, body: string, f: Flash = {}
   return doc(
     title,
     c.brand,
-    `<div class="app">
+    `${extraScript ? `<script src="${extraScript}" defer></script>` : ""}<div class="app">
 <aside class="side">
   <a class="brand" href="${c.role === "admin" ? "/admin" : "/app"}">${h(c.brand)}</a>
   ${nav}
@@ -302,7 +303,7 @@ ${pct >= 90 ? `<div class="notice warn">Usou ${pct}% dos minutos deste mês. Ao 
 </div>
 ${
   allDone
-    ? `<div class="card"><h2>${s.pending > 0 ? `Tem ${s.pending} pedido${s.pending === 1 ? "" : "s"} de reserva por tratar` : "Está tudo em dia"}</h2><p class="muted">${s.pending > 0 ? "Confirme ou recuse cada pedido depois de falar com o hóspede." : "Os novos pedidos de reserva aparecem aqui e na página de pedidos."}</p>${s.pending > 0 ? `<a class="btn" href="/app/reservas">Ver pedidos</a>` : ""}</div>`
+    ? `<div class="card" style="margin-bottom:16px"><h2>Ouça o seu assistente</h2><p class="muted">Faça uma chamada de teste pelo microfone do computador, com os dados atuais do resort.</p><a class="btn" href="/app/testar">Testar o assistente</a></div><div class="card"><h2>${s.pending > 0 ? `Tem ${s.pending} pedido${s.pending === 1 ? "" : "s"} de reserva por tratar` : "Está tudo em dia"}</h2><p class="muted">${s.pending > 0 ? "Confirme ou recuse cada pedido depois de falar com o hóspede." : "Os novos pedidos de reserva aparecem aqui e na página de pedidos."}</p>${s.pending > 0 ? `<a class="btn" href="/app/reservas">Ver pedidos</a>` : ""}</div>`
     : `<div class="card"><h2>Primeiros passos</h2><p class="muted">Conclua estes passos para o assistente começar a atender.</p><ul class="steps">${steps
         .map(
           ([done, title, desc, href]) =>
@@ -618,4 +619,38 @@ export function adminLeadsPage(c: Ctx, leads: Lead[]): string {
           )
           .join("")}</tbody></table></div>`;
   return shell(c, "Pedidos de demonstração", "Contactos recebidos pelo formulário do site.", body);
+}
+
+export function testCallPage(c: Ctx, t: Tenant): string {
+  const langs = t.profile.languages.map((l) => langLabel(l.code)).join(", ");
+  return shell(
+    c,
+    "Testar o assistente",
+    "Fale com o assistente pelo microfone do computador, como um hóspede faria ao telefone.",
+    `
+<div class="card call" id="call" data-csrf="${h(c.csrf)}">
+  <div class="call-head">
+    <div><strong>${h(t.name)}</strong><div class="muted small">Idiomas: ${h(langs)}</div></div>
+    <span class="badge" id="call-status" role="status" aria-live="polite">Pronto</span>
+  </div>
+  <div class="call-log" id="call-log" aria-live="polite">
+    <div class="empty" id="call-empty"><strong>Ainda não começou</strong>Carregue em “Iniciar chamada” e autorize o microfone. Fale depois da saudação.</div>
+  </div>
+  <form class="call-type" id="call-type" autocomplete="off">
+    <label for="call-text" class="sr">Escrever ao assistente</label>
+    <input id="call-text" type="text" maxlength="500" placeholder="Ou escreva aqui e carregue em Enter" disabled>
+    <button class="btn secondary" type="submit" id="call-send" disabled>Enviar</button>
+  </form>
+  <div class="actions">
+    <button class="btn large" type="button" id="call-start">Iniciar chamada</button>
+    <button class="btn secondary large" type="button" id="call-stop-speaking" hidden>Interromper</button>
+    <button class="btn danger large" type="button" id="call-end" hidden>Desligar</button>
+  </div>
+  <p class="hint" id="call-support"></p>
+</div>
+<p class="hint">Use o Chrome ou o Edge para falar ao microfone. As chamadas de teste contam como chamadas normais nos minutos e no histórico. A voz do teste é a do browser; ao telefone, o hóspede ouve a voz configurada no Twilio.</p>`,
+    {},
+    "",
+    "/assets/test-call.js",
+  );
 }

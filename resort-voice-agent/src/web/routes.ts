@@ -15,7 +15,7 @@ import {
 import type { Tenant, User } from "../db/store.js";
 import { publicHttpsUrlError } from "../net.js";
 import type { ReservationPii } from "../reservations.js";
-import { ResortSchema, type Resort } from "../resort.js";
+import { LANGUAGE_DEFAULTS, ResortSchema, newTenantProfile, renameInGreetings } from "../resort.js";
 import type { AppDeps } from "../server.js";
 import * as V from "./views.js";
 
@@ -24,13 +24,8 @@ const SESSION_HOURS = 12;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const E164 = /^\+[1-9]\d{6,14}$/;
 
-export const LANGUAGE_OPTIONS: V.LanguageOption[] = [
-  { code: "pt-PT", label: "Português", defaultGreeting: "Olá, obrigado por ligar. Fala com o assistente virtual, um sistema de inteligência artificial. Esta chamada não é gravada. Pode pedir a qualquer momento para falar com a receção, ou marcar zero. Em que posso ajudar?" },
-  { code: "en-GB", label: "English", defaultGreeting: "Hello, thank you for calling. You are speaking with a virtual assistant powered by artificial intelligence. This call is not recorded. You can ask for reception at any time or press zero. How can I help?" },
-  { code: "es-ES", label: "Español", defaultGreeting: "Hola, gracias por llamar. Habla con un asistente virtual de inteligencia artificial. Esta llamada no se graba. Puede pedir hablar con recepción o pulsar cero. ¿En qué puedo ayudarle?" },
-  { code: "fr-FR", label: "Français", defaultGreeting: "Bonjour, merci de votre appel. Vous parlez avec un assistant virtuel doté d'intelligence artificielle. Cet appel n'est pas enregistré. Vous pouvez demander la réception ou appuyer sur zéro. Comment puis-je vous aider ?" },
-  { code: "de-DE", label: "Deutsch", defaultGreeting: "Guten Tag, vielen Dank für Ihren Anruf. Sie sprechen mit einem virtuellen Assistenten mit künstlicher Intelligenz. Dieser Anruf wird nicht aufgezeichnet. Sie können jederzeit die Rezeption verlangen oder die Null drücken. Wie kann ich Ihnen helfen?" },
-];
+const languageOptions = (name: string): V.LanguageOption[] =>
+  LANGUAGE_DEFAULTS.map((d) => ({ code: d.code, label: d.label, defaultGreeting: d.greeting(name) }));
 
 interface Auth {
   user: User;
@@ -75,7 +70,12 @@ function profileError(err: z.ZodError): string {
   return what ? `${what}: verifique o valor introduzido.` : "Verifique os valores introduzidos.";
 }
 
-export function mountWeb(app: Express, deps: AppDeps): void {
+export interface WebExtras {
+  allowedOrigins: Set<string>;
+  issueTestCall: (tenant: Tenant) => Promise<{ callSid: string; path: string } | null>;
+}
+
+export function mountWeb(app: Express, deps: AppDeps, extras: WebExtras): void {
   const { config, store, log } = deps;
   const brand = config.BRAND_NAME;
   const publicDir = deps.publicDir ?? fileURLToPath(new URL("../../public", import.meta.url));
@@ -90,7 +90,13 @@ export function mountWeb(app: Express, deps: AppDeps): void {
   const sameOrigin = (req: Request, res: Response, next: NextFunction) => {
     const origin = req.header("origin") ?? "";
     const referer = req.header("referer") ?? "";
-    const ok = origin ? origin === config.PUBLIC_BASE_URL : referer.startsWith(`${config.PUBLIC_BASE_URL}/`);
+    let refOrigin = "";
+    try {
+      refOrigin = referer ? new URL(referer).origin : "";
+    } catch {
+      refOrigin = "";
+    }
+    const ok = extras.allowedOrigins.has(origin || refOrigin);
     if (!ok) return res.status(403).type("text/plain").send("Forbidden");
     next();
   };
@@ -277,6 +283,21 @@ export function mountWeb(app: Express, deps: AppDeps): void {
     res.redirect(303, "/app/reservas?ok=estado");
   });
 
+  // ---- Chamada de teste no browser
+  app.get("/app/testar", owner, async (req: AuthedRequest, res) => {
+    html(res, V.testCallPage(ctx(req), await tenantOf(req)));
+  });
+  app.post("/app/testar", ...post, owner, async (req: AuthedRequest, res) => {
+    const t = await tenantOf(req);
+    if (t.status !== "active") return res.status(409).json({ error: "O serviço está suspenso. Contacte o suporte." });
+    const { minutes } = await store.monthStats(t.id);
+    if (minutes >= t.monthly_minutes_limit) return res.status(409).json({ error: "Atingiu os minutos incluídos este mês." });
+    const call = await extras.issueTestCall(t);
+    if (!call) return res.status(503).json({ error: "Há demasiadas chamadas em curso. Tente daqui a pouco." });
+    const lang = t.profile.languages[0]!;
+    res.set("cache-control", "no-store").json({ ...call, language: lang.code, greeting: lang.welcomeGreeting });
+  });
+
   // ---- Resort
   const saveProfile = async (
     req: AuthedRequest,
@@ -301,9 +322,11 @@ export function mountWeb(app: Express, deps: AppDeps): void {
     const t = await tenantOf(req);
     const b = req.body ?? {};
     const reception = text(b.reception_phone, 16).replace(/\s+/g, "");
+    const newName = text(b.name, 100);
     const draft = {
       ...t.profile,
-      name: text(b.name, 100),
+      name: newName,
+      languages: renameInGreetings(t.profile.languages, t.profile.name, newName),
       address: text(b.address, 200),
       website: text(b.website, 200) || undefined,
       email: text(b.email, 254) || undefined,
@@ -366,7 +389,7 @@ export function mountWeb(app: Express, deps: AppDeps): void {
   });
 
   app.get("/app/resort/idiomas", owner, async (req: AuthedRequest, res) => {
-    html(res, V.resortLanguagesPage(ctx(req), (await tenantOf(req)).profile, LANGUAGE_OPTIONS, flash(req)));
+    html(res, V.resortLanguagesPage(ctx(req), (await tenantOf(req)).profile, languageOptions((await tenantOf(req)).profile.name), flash(req)));
   });
   app.post("/app/resort/idiomas", ...post, owner, async (req: AuthedRequest, res) => {
     const t = await tenantOf(req);
@@ -374,7 +397,7 @@ export function mountWeb(app: Express, deps: AppDeps): void {
     const chosen = new Set(list(b.lang));
     const primary = text(b.primary, 5);
     chosen.add(primary);
-    const languages = LANGUAGE_OPTIONS.filter((o) => chosen.has(o.code))
+    const languages = languageOptions(t.profile.name).filter((o) => chosen.has(o.code))
       .sort((x, y) => Number(y.code === primary) - Number(x.code === primary))
       .map((o) => ({
         code: o.code,
@@ -384,7 +407,7 @@ export function mountWeb(app: Express, deps: AppDeps): void {
         welcomeGreeting: text(b[`greeting_${o.code}`], 400),
       }));
     const draft = { ...t.profile, languages };
-    await saveProfile(req, res, t, draft, (p, f) => V.resortLanguagesPage(ctx(req), p, LANGUAGE_OPTIONS, f), "/app/resort/idiomas");
+    await saveProfile(req, res, t, draft, (p, f) => V.resortLanguagesPage(ctx(req), p, languageOptions(t.profile.name), f), "/app/resort/idiomas");
   });
 
   // ---- Integrações
@@ -440,7 +463,7 @@ export function mountWeb(app: Express, deps: AppDeps): void {
     if (name.length < 2) return fail("Indique o nome do resort.");
     if (!z.string().email().safeParse(email).success) return fail("Indique um e-mail válido.");
     if (await store.userByEmail(email)) return fail("Já existe uma conta com este e-mail.");
-    const profile: Resort = { ...deps.resortTemplate, name };
+    const profile = newTenantProfile(deps.resortTemplate, name);
     const temp = temporaryPassword();
     const id = await store.createTenantWithOwner(name, profile, email, await hashPassword(temp));
     await store.audit(req.auth!.user.id, id, "cliente_criado");

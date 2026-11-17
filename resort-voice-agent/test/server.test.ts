@@ -35,7 +35,7 @@ afterAll(async () => {
   await store.close();
 });
 beforeEach(async () => {
-  await store.pool.query("TRUNCATE tenants, users, web_sessions, calls, reservation_requests, leads, audit_log CASCADE");
+  await store.db.query("TRUNCATE tenants, users, web_sessions, calls, reservation_requests, leads, audit_log CASCADE");
   await seedAdmin(store);
   tenantA = await seedTenant(store, "Resort A", "a@example.test", NUMBER_A);
   tenantB = await seedTenant(store, "Resort B", "b@example.test", NUMBER_B);
@@ -412,10 +412,12 @@ describe("web: painel do resort", () => {
     const general = { name: "Resort A Renovado", address: "Rua Nova 1, Faro", website: "", email: "", min_nights: "1", max_nights: "14", max_days_in_advance: "300" };
     expect((await b.post("/app/resort", { ...general, reception_phone: "912345678" })).status).toBe(400);
     expect((await b.post("/app/resort", { ...general, reception_phone: "+351 289 000 000" })).location).toBe("/app/resort?ok=guardado");
+    expect((await store.tenantById(tenantA))!.profile.languages[0]!.welcomeGreeting).toContain("ligar para o Resort A Renovado.");
     await b.post("/app/resort/informacao", { policy_a: ["Check-in", ""], policy_b: ["a partir das 16h00", ""], facilities: "Piscina\n\nSpa", faq_a: ["Têm ginásio?"], faq_b: ["Sim, 24 horas."] });
     await b.post("/app/resort/idiomas", { primary: "en-GB", lang: ["pt-PT", "de-DE"], "greeting_en-GB": "Hello, this is the virtual assistant, an AI system.", "greeting_pt-PT": "Olá, fala o assistente virtual de inteligência artificial.", "greeting_de-DE": "Guten Tag, hier ist der virtuelle KI-Assistent." });
     const t = (await store.tenantById(tenantA))!;
     expect(t.name).toBe("Resort A Renovado");
+    expect(t.profile.languages.find((l) => l.code === "pt-PT")!.welcomeGreeting).toBe("Olá, fala o assistente virtual de inteligência artificial.");
     expect(t.reception_phone).toBe("+351289000000");
     expect(t.profile.booking_rules.max_nights).toBe(14);
     expect(t.profile.policies).toEqual({ "Check-in": "a partir das 16h00" });
@@ -445,6 +447,52 @@ describe("web: painel do resort", () => {
   });
 });
 
+describe("web: chamada de teste no browser", () => {
+  const wsOpen = (port: number, path: string, origin?: string) =>
+    new Promise<{ ws: WebSocket; inbox: any[] }>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers: origin ? { origin } : {} });
+      const inbox: any[] = [];
+      ws.on("message", (d) => inbox.push(JSON.parse(d.toString())));
+      ws.on("open", () => resolve({ ws, inbox }));
+      ws.on("unexpected-response", (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
+      ws.on("error", reject);
+    });
+
+  it("só o dono autenticado obtém um token, de uso único e só da nossa origem", async () => {
+    const { port } = await start([{ blocks: [{ type: "text", text: "Temos sim." }] }]);
+    expect((await new Browser(port).post("/app/testar", {})).location).toBe("/login");
+    const b = new Browser(port);
+    await b.login("a@example.test", OWNER_PASSWORD);
+    expect((await b.get("/app/testar")).body).toContain("Iniciar chamada");
+    const res = await b.post("/app/testar", {});
+    const call = JSON.parse(res.body);
+    expect(call).toMatchObject({ language: "pt-PT", path: expect.stringMatching(/^\/relay-test\//) });
+    expect(call.greeting).toContain("Resort A");
+
+    await expect(wsOpen(port, call.path)).rejects.toThrow(/403/);
+    await expect(wsOpen(port, call.path, "https://evil.example")).rejects.toThrow(/403/);
+    const { ws, inbox } = await wsOpen(port, call.path, BASE);
+    await expect(wsOpen(port, call.path, BASE)).rejects.toThrow(/403/); // já usado
+    ws.send(JSON.stringify({ type: "setup", callSid: call.callSid }));
+    ws.send(JSON.stringify({ type: "prompt", voicePrompt: "Têm quartos?", last: true }));
+    await waitFor(() => inbox.find((m) => m.type === "text" && m.last === true));
+    expect(inbox.map((m) => m.token).join("")).toContain("Temos sim.");
+    ws.close();
+    const logged = await waitFor(async () => (await store.listCalls(tenantA)).find((c) => c.outcome !== null));
+    expect(logged).toMatchObject({ call_sid: call.callSid, turns: 1 });
+  });
+
+  it("respeita os limites do plano", async () => {
+    const { port } = await start();
+    await store.updateTenantAdmin(tenantA, { status: "active", twilio_number: NUMBER_A, max_concurrent_calls: 5, monthly_minutes_limit: 0 });
+    const b = new Browser(port);
+    await b.login("a@example.test", OWNER_PASSWORD);
+    const res = await b.post("/app/testar", {});
+    expect(res.status).toBe(409);
+    expect(JSON.parse(res.body).error).toContain("minutos");
+  });
+});
+
 describe("web: administração e site", () => {
   it("admin cria cliente com palavra-passe temporária de alteração obrigatória", async () => {
     const { port } = await start();
@@ -453,6 +501,9 @@ describe("web: administração e site", () => {
     expect((await admin.post("/admin/clientes/novo", { name: "Resort C", email: "a@example.test" })).body).toContain("Já existe uma conta");
     const created = await admin.post("/admin/clientes/novo", { name: "Resort C", email: "C@Example.test" });
     const temp = /id="tmp-pw">([^<]+)</.exec(created.body)![1]!;
+    const tc = (await store.listTenants()).find((t) => t.name === "Resort C")!;
+    expect(tc.profile.languages[0]!.welcomeGreeting).toContain("ligar para o Resort C.");
+    expect(tc.profile.languages.every((l) => !l.welcomeGreeting.includes("Exemplo Algarve"))).toBe(true);
     expect(created.body).toContain(`${BASE}/voice`);
 
     const owner = new Browser(port);
@@ -499,7 +550,7 @@ describe("web: administração e site", () => {
       check_in: "2030-01-01", check_out: "2030-01-03", room_type: "duplo_mar", adults: 2, children: 0, quoted_total: 320, currency: "EUR",
     });
     expect(await store.purge(90)).toBe(0);
-    await store.pool.query("UPDATE reservation_requests SET created_at = now() - interval '91 days'");
+    await store.db.query("UPDATE reservation_requests SET created_at = now() - interval '91 days'");
     expect(await store.purge(90)).toBe(1);
     const rows = await store.listReservations(tenantA);
     expect(rows).toHaveLength(1);

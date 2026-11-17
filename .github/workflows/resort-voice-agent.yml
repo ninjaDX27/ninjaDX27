@@ -37,3 +37,33 @@ jobs:
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
       - run: docker build -t resort-voice-agent:ci .
+
+  desktop-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: resort-voice-agent
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: resort-voice-agent/package-lock.json
+      - run: npm ci
+      - run: node scripts/build-desktop.mjs win --with-cloudflared
+      - name: Smoke test do Atendia.exe
+        run: |
+          export ATENDIA_HOME="$RUNNER_TEMP/atendia" ATENDIA_NO_BROWSER=1 ANTHROPIC_API_KEY=sk-ant-ci-000000000000000000000000
+          ./build/desktop/win/Atendia.exe > "$RUNNER_TEMP/atendia.log" 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8080/healthz && break; sleep 2; done
+          cat "$RUNNER_TEMP/atendia.log"
+          curl -sf http://127.0.0.1:8080/healthz
+          curl -sf -o /dev/null http://127.0.0.1:8080/login
+          test -f "$ATENDIA_HOME/ACESSOS.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Atendia-Windows
+          path: resort-voice-agent/build/desktop/win/
+          retention-days: 30

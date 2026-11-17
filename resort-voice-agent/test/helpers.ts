@@ -5,8 +5,9 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { StreamFactory, StreamParams, TurnStream } from "../src/agent.js";
 import { loadConfig } from "../src/config.js";
 import { Crypto, hashPassword } from "../src/crypto.js";
+import { PgDb } from "../src/db/driver.js";
 import { Store } from "../src/db/store.js";
-import { ResortSchema, type Resort } from "../src/resort.js";
+import { ResortSchema, newTenantProfile, type Resort } from "../src/resort.js";
 import { createApp } from "../src/server.js";
 
 export const silentLog = pino({ level: "silent" });
@@ -35,8 +36,8 @@ export const testCrypto = () => new Crypto(TEST_ENV.MASTER_ENCRYPTION_KEY);
 
 /** Base de dados limpa, com o esquema migrado. */
 export async function freshStore(): Promise<Store> {
-  const store = new Store(DB_URL, false);
-  await store.pool.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
+  const store = new Store(new PgDb(DB_URL, false));
+  await store.db.exec("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
   await store.migrate();
   return store;
 }
@@ -52,7 +53,7 @@ export async function seedAdmin(store: Store): Promise<void> {
 
 /** Cria um resort ativo com número, receção e dono com a palavra-passe já definida. */
 export async function seedTenant(store: Store, name: string, email: string, number: string | null): Promise<string> {
-  const id = await store.createTenantWithOwner(name, { ...testResort(), name }, email, await hashPassword(OWNER_PASSWORD));
+  const id = await store.createTenantWithOwner(name, newTenantProfile(testResort(), name), email, await hashPassword(OWNER_PASSWORD));
   const owner = await store.ownerOf(id);
   await store.setPassword(owner!.id, await hashPassword(OWNER_PASSWORD), false);
   await store.updateTenantAdmin(id, { status: "active", twilio_number: number, max_concurrent_calls: 5, monthly_minutes_limit: 500 });

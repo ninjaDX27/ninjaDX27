@@ -1,0 +1,36 @@
+ATENDIA: VERSÃO PARA PC
+========================
+
+Assistente telefónico com IA para resorts, a correr no seu computador.
+Serve para demonstrações e testes. Para clientes reais, use a versão de servidor
+(ver o README do projeto).
+
+COMO USAR
+1. Faça duplo clique em Atendia.exe.
+   O Windows pode mostrar "O Windows protegeu o seu PC", porque o programa não está
+   assinado digitalmente. Carregue em "Mais informações" e depois em "Executar mesmo assim".
+2. Na primeira vez, cole a sua chave da API da Anthropic (console.anthropic.com).
+3. O programa mostra os acessos e abre o painel no browser.
+   Os acessos ficam também em: %LOCALAPPDATA%\Atendia\ACESSOS.txt
+4. Entre com o acesso do resort e abra "Testar o assistente".
+   Use o Chrome ou o Edge e autorize o microfone.
+5. Para fechar, feche a janela preta do programa.
+
+ONDE FICAM OS DADOS
+%LOCALAPPDATA%\Atendia
+  definicoes.json   chaves e configuração (não partilhe este ficheiro)
+  dados\            base de dados
+Para recomeçar do zero, feche o programa e apague esta pasta.
+
+CHAMADAS REAIS PELO TWILIO (OPCIONAL)
+1. Tenha o cloudflared.exe na mesma pasta que o Atendia.exe.
+2. Em definicoes.json, acrescente:  "twilioAuthToken": "o seu Auth Token do Twilio"
+3. Reinicie o programa. Aparece um endereço https://...trycloudflare.com/voice.
+4. No Twilio, no seu número, em "A call comes in", escolha Webhook (HTTP POST) com esse endereço.
+5. No painel de administração, atribua o número do Twilio ao resort.
+O endereço muda sempre que o programa reinicia, e o computador tem de estar ligado.
+
+SEGURANÇA
+- O painel só aceita ligações deste computador (127.0.0.1).
+- Os dados pessoais dos pedidos de reserva ficam cifrados.
+- As chamadas não são gravadas.

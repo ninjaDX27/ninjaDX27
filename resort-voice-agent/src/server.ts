@@ -14,6 +14,7 @@ import { DbReservationSink, type WebhookOptions } from "./reservations.js";
 import type { Resort } from "./resort.js";
 import { CallSession } from "./session.js";
 import { SessionTokens, fallbackTwiml, hangupTwiml, isValidTwilioSignature, relayTwiml, unavailableTwiml } from "./twilio.js";
+import { randomBytes } from "node:crypto";
 import { mountWeb } from "./web/routes.js";
 
 export interface AppDeps {
@@ -31,12 +32,15 @@ export interface AppDeps {
 const CALL_SID = /^CA[0-9a-f]{32}$/;
 const E164 = /^\+[1-9]\d{6,14}$/;
 const RELAY_PATH = /^\/relay\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/;
+const TEST_RELAY_PATH = /^\/relay-test\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/;
 
 export function createApp(deps: AppDeps): { server: Server; shutdown: () => Promise<void>; activeCalls: () => number } {
   const { config, log, store } = deps;
   const tokens = new SessionTokens(config.SESSION_SIGNING_SECRET);
   const sessions = new Map<WebSocket, string>(); // ws -> tenantId
-  const wsBase = config.PUBLIC_BASE_URL.replace(/^https:/, "wss:");
+  const wsBase = config.PUBLIC_BASE_URL.replace(/^http/, "ws");
+  /** Origens dos browsers que podem usar o painel (o URL público e, na versão PC, o localhost). */
+  const allowedOrigins = new Set([new URL(config.PUBLIC_BASE_URL).origin, ...config.EXTRA_ORIGINS]);
   const activeFor = (tenantId: string) => [...sessions.values()].filter((t) => t === tenantId).length;
 
   const app = express();
@@ -55,17 +59,28 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
           formAction: ["'self'"],
           baseUri: ["'none'"],
           frameAncestors: ["'none'"],
+          connectSrc: ["'self'"],
+          mediaSrc: ["'self'"],
+          // Em localhost (versão PC) não se força HTTPS.
+          upgradeInsecureRequests: config.DESKTOP_MODE ? null : [],
         },
       },
+      strictTransportSecurity: !config.DESKTOP_MODE,
       referrerPolicy: { policy: "same-origin" },
     }),
   );
+  // Microfone só para a chamada de teste, e só nesta origem.
+  app.use((_req, res, next) => {
+    res.set("permissions-policy", "microphone=(self), camera=(), geolocation=(), payment=()");
+    next();
+  });
   app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: "draft-8", legacyHeaders: false }));
 
   const twilioForm = express.urlencoded({ extended: false, limit: "20kb", parameterLimit: 100 });
 
   /** Rejeita pedidos que não venham assinados pelo Twilio. */
   const requireTwilio = (req: Request, res: Response, next: NextFunction) => {
+    if (!config.TWILIO_AUTH_TOKEN) return res.status(503).type("text/plain").send("Twilio not configured");
     if (!config.TWILIO_VALIDATE_SIGNATURE) return next();
     const ok = isValidTwilioSignature(
       config.TWILIO_AUTH_TOKEN,
@@ -149,7 +164,16 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
     return sendTwiml(res, fallbackTwiml(tenant?.reception_phone ?? null, lang, data.action !== "transfer"));
   });
 
-  mountWeb(app, deps);
+  mountWeb(app, deps, {
+    allowedOrigins,
+    /** Emite um token para a chamada de teste no browser (só o dono autenticado chega aqui). */
+    issueTestCall: async (tenant: Tenant) => {
+      if (sessions.size >= config.MAX_CONCURRENT_CALLS || activeFor(tenant.id) >= tenant.max_concurrent_calls) return null;
+      const callSid = `CA${randomBytes(16).toString("hex")}`;
+      await store.startCall(tenant.id, callSid, "teste-no-browser");
+      return { callSid, path: `/relay-test/${tokens.issue(callSid, tenant.id)}` };
+    },
+  });
 
   app.use((_req, res) => {
     res.status(404).type("text/plain").send("Not Found");
@@ -226,10 +250,17 @@ export function createApp(deps: AppDeps): { server: Server; shutdown: () => Prom
 
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
-    const match = RELAY_PATH.exec(path);
+    const testMatch = TEST_RELAY_PATH.exec(path);
+    const match = RELAY_PATH.exec(path) ?? testMatch;
     if (!match) return reject(socket, 404, "Not Found");
 
-    if (config.TWILIO_VALIDATE_SIGNATURE) {
+    if (testMatch) {
+      // Chamada de teste no browser: tem de vir da nossa origem (impede sequestro de WebSocket entre sites).
+      // O token só é emitido a um dono autenticado, com CSRF, e é de uso único.
+      if (!allowedOrigins.has(String(req.headers.origin ?? ""))) return reject(socket, 403, "Forbidden");
+    } else if (!config.TWILIO_AUTH_TOKEN) {
+      return reject(socket, 403, "Forbidden");
+    } else if (config.TWILIO_VALIDATE_SIGNATURE) {
       const header = req.headers["x-twilio-signature"];
       const sig = Array.isArray(header) ? header[0] : header;
       // O URL assinado deriva sempre de PUBLIC_BASE_URL, nunca do cabeçalho Host.

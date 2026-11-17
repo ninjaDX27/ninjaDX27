@@ -6,3 +6,4 @@ dist/
 config/resort.json
 *.log
 coverage/
+build/

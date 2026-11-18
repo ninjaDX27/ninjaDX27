@@ -40,7 +40,7 @@ export function normalizeDid(raw: string): string | null {
   let d = raw.replace(/[\s()-]/g, "");
   if (d.startsWith("00")) d = `+${d.slice(2)}`;
   else if (/^351\d{9}$/.test(d)) d = `+${d}`;
-  else if (/^[29]\d{8}$/.test(d)) d = `+351${d}`;
+  else if (/^[2-9]\d{8}$/.test(d)) d = `+351${d}`;
   return /^\+[1-9]\d{6,14}$/.test(d) ? d : null;
 }
 
@@ -203,9 +203,9 @@ export function createApp(deps: AppDeps): {
     res.set("cache-control", "no-store");
     next();
   };
-  /** Resposta para o dialplan: "ok", "transfer,+351…" ou "reject". */
+  /** Resposta para o dialplan: "ok", "transfer:+351…" ou "reject". */
   const dialplanTransfer = (tenant: Tenant) =>
-    transferAllowed(tenant.reception_phone) ? `transfer,${tenant.reception_phone}` : "reject";
+    transferAllowed(tenant.reception_phone) ? `transfer:${tenant.reception_phone}` : "reject";
 
   app.get("/asterisk/start", asteriskAuth, async (req, res) => {
     gc();
@@ -260,15 +260,12 @@ export function createApp(deps: AppDeps): {
             pendingCalls.delete(uuid);
             return call && call.expires >= Date.now() ? call : null;
           },
-          start: (ws, call) => {
-            store
-              .tenantById(call.tenantId)
-              .then((tenant) => {
-                if (!tenant) return ws.close();
-                transferTargets.set(call.callSid, tenant.reception_phone);
-                startSession(ws, tenant, call.callSid);
-              })
-              .catch(() => ws.close());
+          start: async (ws, call) => {
+            const tenant = await store.tenantById(call.tenantId);
+            if (!tenant || tenant.status !== "active") return false;
+            transferTargets.set(call.callSid, tenant.reception_phone);
+            startSession(ws, tenant, call.callSid);
+            return true;
           },
           handoff: (uuid, data) => {
             const callSid = `AS${uuid.replace(/-/g, "")}`;
@@ -276,7 +273,7 @@ export function createApp(deps: AppDeps): {
             transferTargets.delete(callSid);
             let text = "end";
             if (data.action === "transfer") {
-              if (transferAllowed(target)) text = `transfer,${target}`;
+              if (transferAllowed(target)) text = `transfer:${target}`;
               else log.warn({ call: callSid }, "transferência pedida mas sem número de receção permitido");
             }
             handoffs.set(uuid, { text, expires: Date.now() + 120_000 });

@@ -37,8 +37,8 @@ export const DEFAULT_VAD: VadOptions = { silenceMs: 700, minSpeechMs: 250, maxUt
 export interface BridgeOptions {
   /** Devolve (e consome) a chamada registada pelo dialplan, ou null. */
   claim(uuid: string): PendingCall | null;
-  /** Arranca a CallSession com o socket falso. */
-  start(ws: RelaySocket, call: PendingCall): void;
+  /** Arranca a CallSession com o socket falso. Devolve false se não for possível. */
+  start(ws: RelaySocket, call: PendingCall): Promise<boolean>;
   /** Guarda o resultado para o dialplan (transferir ou desligar). */
   handoff(uuid: string, data: { action: string; language: string }): void;
   speech: SpeechClient;
@@ -114,6 +114,8 @@ export class VoiceBridge {
   private utterance: Buffer[] = [];
   private preRoll: Buffer[] = [];
   private sttChain: Promise<void> = Promise.resolve();
+  /** Fecha a fala quando deixa de chegar áudio (o Asterisk e muitos operadores não enviam silêncio). */
+  private silenceTimer: NodeJS.Timeout | null = null;
   private readonly uuidTimer: NodeJS.Timeout;
 
   constructor(
@@ -168,9 +170,17 @@ export class VoiceBridge {
       (data) => this.onAgentMessage(data),
       () => this.close("sessão terminada"),
     );
-    this.opts.start(this.ws, call);
-    this.ws.deliver({ type: "setup", callSid: call.callSid, from: call.from ?? undefined });
-    this.say(call.greeting);
+    const ws = this.ws;
+    // A sessão tem de estar a ouvir antes de receber o "setup" (o resort é carregado da base de dados).
+    this.opts
+      .start(ws, call)
+      .then((ok) => {
+        if (!ok) return this.close("cliente indisponível");
+        if (this.closed) return;
+        ws.deliver({ type: "setup", callSid: call.callSid, from: call.from ?? undefined });
+        this.say(call.greeting);
+      })
+      .catch(() => this.close("erro ao iniciar a sessão"));
   }
 
   private onAudio(frame: Buffer): void {
@@ -193,6 +203,7 @@ export class VoiceBridge {
     }
 
     this.utterance.push(frame);
+    this.armSilenceTimer();
     if (level > threshold * 0.6) {
       this.voicedFrames++;
       this.silentFrames = 0;
@@ -203,7 +214,16 @@ export class VoiceBridge {
     if (this.silentFrames * FRAME_MS >= this.vad.silenceMs || total >= this.vad.maxUtteranceMs) this.onSpeechEnd();
   }
 
+  private armSilenceTimer(): void {
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    this.silenceTimer = setTimeout(() => {
+      this.silenceTimer = null;
+      if (this.speaking && !this.closed) this.onSpeechEnd();
+    }, this.vad.silenceMs);
+  }
+
   private onSpeechStart(): void {
+    this.armSilenceTimer();
     this.speaking = true;
     this.startCandidates = 0;
     this.silentFrames = 0;
@@ -214,6 +234,8 @@ export class VoiceBridge {
   }
 
   private onSpeechEnd(): void {
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    this.silenceTimer = null;
     const audio = Buffer.concat(this.utterance);
     const voicedMs = this.voicedFrames * FRAME_MS;
     this.speaking = false;
@@ -375,6 +397,7 @@ export class VoiceBridge {
     if (this.closed) return;
     this.closed = true;
     clearTimeout(this.uuidTimer);
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
     if (this.playTimer) clearInterval(this.playTimer);
     this.playTimer = null;
     for (const w of this.idleWaiters.splice(0)) w();

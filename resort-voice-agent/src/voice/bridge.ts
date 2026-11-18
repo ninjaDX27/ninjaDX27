@@ -19,6 +19,8 @@ export interface PendingCall {
   from: string | null;
   language: string;
   greeting: string;
+  /** Vocabulário do resort para orientar a transcrição. */
+  vocabulary?: string;
 }
 
 export interface VadOptions {
@@ -89,6 +91,7 @@ export class VoiceBridge {
   private ws: RelaySocket | null = null;
   private uuid: string | null = null;
   private lang = "pt-PT";
+  private vocabulary: string | undefined;
   private closed = false;
   private ending = false;
 
@@ -166,6 +169,7 @@ export class VoiceBridge {
     if (!uuid || !call) return this.close("chamada desconhecida");
     this.uuid = uuid;
     this.lang = call.language;
+    this.vocabulary = call.vocabulary;
     this.ws = new RelaySocket(
       (data) => this.onAgentMessage(data),
       () => this.close("sessão terminada"),
@@ -252,8 +256,8 @@ export class VoiceBridge {
     if (this.closed) return;
     const current = this.lang.slice(0, 2);
     // Deteção automática do idioma; se for incerta e diferente do atual, repete no idioma atual.
-    let res = await this.opts.speech.stt(audio, SAMPLE_RATE, null);
-    if (res.language !== current && res.probability < 0.8) res = await this.opts.speech.stt(audio, SAMPLE_RATE, current);
+    let res = await this.opts.speech.stt(audio, SAMPLE_RATE, null, this.vocabulary);
+    if (res.language !== current && res.probability < 0.8) res = await this.opts.speech.stt(audio, SAMPLE_RATE, current, this.vocabulary);
     const text = res.text.trim();
     if (text.length < 2 || HALLUCINATIONS.some((re) => re.test(text)) || this.closed) return;
     this.agentBusy = true;

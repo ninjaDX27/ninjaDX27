@@ -11,7 +11,7 @@ import type { AppConfig } from "./config.js";
 import type { Crypto } from "./crypto.js";
 import type { Store, Tenant } from "./db/store.js";
 import { DbReservationSink, type WebhookOptions } from "./reservations.js";
-import type { Resort } from "./resort.js";
+import { sttVocabulary, type Resort } from "./resort.js";
 import { CallSession } from "./session.js";
 import { SessionTokens, fallbackTwiml, hangupTwiml, isValidTwilioSignature, relayTwiml, unavailableTwiml } from "./twilio.js";
 import { randomBytes } from "node:crypto";
@@ -232,6 +232,7 @@ export function createApp(deps: AppDeps): {
       from: /^\+[1-9]\d{6,14}$/.test(from) ? from : null,
       language: primary.code,
       greeting: primary.welcomeGreeting,
+      vocabulary: sttVocabulary(tenant.profile),
       expires: Date.now() + 60_000,
     });
     await store.startCall(tenant.id, callSid, deps.crypto.pseudonymize(from));

@@ -81,6 +81,16 @@ Operador SIP (número PT) ─SIP/UDP─▶ Asterisk ─AudioSocket─▶ Atendia
 | Tempo de resposta (medido, CPU de 4 núcleos) | ~1,5–2,5 s | ~3–4,5 s (transcrição: 0,7 s com Whisper base, 1,6 s com small) |
 | Qualidade | Melhor reconhecimento e vozes | Boa; o Whisper pode errar palavras curtas ao telefone |
 
+**Precisão da transcrição** (12 frases típicas de hóspedes, áudio telefónico de 8 kHz, CPU de 4 núcleos):
+
+| `WHISPER_MODEL` | Erro por palavra | Tempo por frase |
+|---|---|---|
+| base | 57% | 1,4 s |
+| **small (por omissão)** | **37%** | **1,3 s** |
+| medium | 21% | 3,5 s |
+
+Os valores são com o vocabulário do resort (nomes dos quartos e termos de reservas), que o Atendia envia automaticamente ao Whisper e que baixa o erro 8 a 10 pontos. **Atenção:** estas frases foram geradas com voz sintética, que o Whisper reconhece pior do que voz humana; mesmo sem passar pelo telefone, o erro foi de 29%. Os números servem para comparar modelos, não para prever a precisão com hóspedes reais. Teste com chamadas reais antes de vender. O assistente está instruído a pedir para repetir quando a frase não faz sentido.
+
 **Validado:** chamadas completas num Asterisk 20 real (saudação, pergunta falada, transcrição, resposta falada, ordem de transferência para a receção), mais 8 testes automáticos (interrupção, ruído, supressão de silêncio, segredo partilhado, anti-fraude). **Por validar:** uma chamada através de um operador SIP real.
 
 ### Instalar (VPS com IP público)

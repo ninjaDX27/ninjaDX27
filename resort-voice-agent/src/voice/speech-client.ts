@@ -5,7 +5,7 @@ export interface SttResult {
   probability: number;
 }
 export interface SpeechClient {
-  stt(pcm: Buffer, rate: number, lang?: string | null): Promise<SttResult>;
+  stt(pcm: Buffer, rate: number, lang?: string | null, vocabulary?: string): Promise<SttResult>;
   tts(text: string, lang: string, rate: number): Promise<Buffer>;
 }
 
@@ -20,13 +20,16 @@ export class HttpSpeechClient implements SpeechClient {
     return { "content-type": contentType, ...(this.token ? { "x-speech-token": this.token } : {}) };
   }
 
-  async stt(pcm: Buffer, rate: number, lang?: string | null): Promise<SttResult> {
+  async stt(pcm: Buffer, rate: number, lang?: string | null, vocabulary?: string): Promise<SttResult> {
     const url = new URL("/stt", this.baseUrl);
     url.searchParams.set("rate", String(rate));
     if (lang) url.searchParams.set("lang", lang.slice(0, 2));
     const res = await this.fetchImpl(url, {
       method: "POST",
-      headers: this.headers("application/octet-stream"),
+      headers: {
+        ...this.headers("application/octet-stream"),
+        ...(vocabulary ? { "x-stt-prompt": encodeURIComponent(vocabulary.slice(0, 500)) } : {}),
+      },
       body: new Uint8Array(pcm),
       signal: AbortSignal.timeout(20_000),
     });

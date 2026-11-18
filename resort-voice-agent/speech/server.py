@@ -12,12 +12,14 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import re
+import unicodedata
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from math import gcd
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import numpy as np
 from faster_whisper import WhisperModel
@@ -71,7 +73,20 @@ def resample(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
     return resample_poly(audio, dst // g, src // g)
 
 
-def transcribe(pcm: bytes, rate: int, lang: str | None) -> dict:
+def _words(s: str) -> list[str]:
+    s = unicodedata.normalize("NFD", s.lower())
+    return re.findall(r"[a-z0-9]+", "".join(c for c in s if unicodedata.category(c) != "Mn"))
+
+
+def echoes_prompt(text: str, prompt: str | None) -> bool:
+    """O Whisper às vezes devolve o próprio vocabulário em vez do que foi dito: descarta-se."""
+    if not prompt:
+        return False
+    words, vocab = _words(text), set(_words(prompt))
+    return len(words) >= 4 and sum(w in vocab for w in words) / len(words) > 0.85
+
+
+def transcribe(pcm: bytes, rate: int, lang: str | None, prompt: str | None = None) -> dict:
     audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
     audio = resample(audio, rate, 16000).astype(np.float32)
     segments, info = whisper.transcribe(
@@ -81,8 +96,11 @@ def transcribe(pcm: bytes, rate: int, lang: str | None) -> dict:
         condition_on_previous_text=False,
         vad_filter=False,
         without_timestamps=True,
+        initial_prompt=prompt or None,
     )
     text = " ".join(s.text.strip() for s in segments).strip()
+    if echoes_prompt(text, prompt):
+        text = ""
     return {"text": text, "language": info.language, "probability": round(float(info.language_probability), 3)}
 
 
@@ -140,7 +158,9 @@ class Handler(BaseHTTPRequestHandler):
             lang = (q.get("lang", [""])[0][:2] or None)
             if lang and lang not in VOICES:
                 lang = None
-            result = transcribe(self.rfile.read(length), rate, lang)
+            # Vocabulário do resort (nomes de quartos, etc.), URL-encoded, para melhorar a transcrição.
+            prompt = unquote(self.headers.get("x-stt-prompt", ""))[:600] or None
+            result = transcribe(self.rfile.read(length), rate, lang, prompt)
             return self._send(200, json.dumps(result).encode())
 
         if url.path == "/tts":

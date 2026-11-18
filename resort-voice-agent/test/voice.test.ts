@@ -33,8 +33,10 @@ afterEach(async () => {
 /** Serviço de voz simulado: o texto "falado" é o número de blocos de áudio recebidos. */
 function fakeSpeech(transcripts: string[]) {
   const spoken: string[] = [];
+  const vocab: string[] = [];
   const client: SpeechClient = {
-    async stt() {
+    async stt(_pcm, _rate, _lang, vocabulary) {
+      vocab.push(vocabulary ?? "");
       return { text: transcripts.shift() ?? "", language: "pt", probability: 0.99 };
     },
     async tts(text) {
@@ -42,7 +44,7 @@ function fakeSpeech(transcripts: string[]) {
       return Buffer.alloc(FRAME_BYTES * 5, 1); // 100 ms de "voz"
     },
   };
-  return { client, spoken };
+  return { client, spoken, vocab };
 }
 
 async function start(replies: ScriptedReply[], transcripts: string[]) {
@@ -63,6 +65,7 @@ async function start(replies: ScriptedReply[], transcripts: string[]) {
     http: (created.server.address() as AddressInfo).port,
     audio: (created.audioServer!.address() as AddressInfo).port,
     spoken: speech.spoken,
+    vocab: speech.vocab,
   };
 }
 
@@ -129,7 +132,7 @@ describe("Asterisk: números e endpoints do dialplan", () => {
 
 describe("Asterisk: conversa por voz", () => {
   it("saudação, fala, transcrição, resposta falada e transferência", async () => {
-    const { http, audio, spoken } = await start(
+    const { http, audio, spoken, vocab } = await start(
       [
         { blocks: [{ type: "text", text: "Temos sim. O quarto duplo custa cento e vinte euros por noite." }] },
         { blocks: [{ type: "text", text: "Vou transferir." }, { type: "tool_use", id: "t1", name: "transfer_to_human", input: { reason: "pedido" } }] },
@@ -147,6 +150,8 @@ describe("Asterisk: conversa por voz", () => {
     await speak(sock);
     await waitFor(() => spoken.find((t) => t.includes("cento e vinte")));
     expect(spoken).toContain("Temos sim.");
+    expect(vocab[0]).toContain("Resort Voz");
+    expect(vocab[0]).toContain("Quarto Duplo Vista Mar");
     expect(spoken).toContain("O quarto duplo custa cento e vinte euros por noite.");
 
     await speak(sock);

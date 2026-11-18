@@ -64,6 +64,39 @@ No Render, em Settings → Custom Domains, adicione por exemplo `app.atendia.pt`
 
 ---
 
+## Voz própria, sem Twilio (Asterisk + Whisper + Piper)
+
+Alternativa mais barata ao Twilio: as chamadas chegam por um **operador SIP** a um **Asterisk** no seu servidor. O áudio é transcrito pelo **Whisper** e as respostas são faladas pelo **Piper**, ambos open-source e a correr no próprio servidor. O Claude continua a conduzir a conversa.
+
+```
+Operador SIP (número PT) ─SIP/UDP─▶ Asterisk ─AudioSocket─▶ Atendia ─▶ Claude
+                                       └─ HTTP (início/transferência) ─┘    └─▶ serviço de voz (Whisper/Piper)
+```
+
+| | Twilio | Voz própria |
+|---|---|---|
+| Custo por minuto (estimativa) | ~$0,11–0,18 | ~0,04–0,07 € (sobretudo o Claude) |
+| Número português | até $135/mês (móvel) | ~1–5 €/mês num operador SIP |
+| Servidor | Render (sem UDP) | **VPS obrigatória** (UDP para SIP e áudio), 4 vCPU / 8 GB, ~15–30 €/mês |
+| Tempo de resposta (medido, CPU de 4 núcleos) | ~1,5–2,5 s | ~3–4,5 s (transcrição: 0,7 s com Whisper base, 1,6 s com small) |
+| Qualidade | Melhor reconhecimento e vozes | Boa; o Whisper pode errar palavras curtas ao telefone |
+
+**Validado:** chamadas completas num Asterisk 20 real (saudação, pergunta falada, transcrição, resposta falada, ordem de transferência para a receção), mais 8 testes automáticos (interrupção, ruído, supressão de silêncio, segredo partilhado, anti-fraude). **Por validar:** uma chamada através de um operador SIP real.
+
+### Instalar (VPS com IP público)
+
+1. Contrate um operador SIP com número português e acesso por registo SIP (utilizador e palavra-passe). Peça que o número marcado seja enviado no pedido SIP; se não for, use `DEFAULT_DID`.
+2. No `.env`, preencha a secção "Voz própria" do `.env.example`: `ASTERISK_ENABLED=true`, `ASTERISK_SECRET`, `SPEECH_TOKEN`, `SIP_*` e `PUBLIC_IP`.
+3. Arranque:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.voz.yml up -d --build
+   ```
+   O primeiro build descarrega cerca de 800 MB de modelos.
+4. Na firewall, abra **só** `5060/udp` e `10000-10100/udp`, de preferência limitados aos IPs do operador. As portas do Atendia (8080) e do AudioSocket (9092) ficam na rede interna.
+5. Na ficha do cliente (Administração), indique o número português no campo do número.
+
+**Anti-fraude:** as transferências só são feitas para números com os prefixos de `TRANSFER_ALLOWED_PREFIXES` (por omissão, fixos e móveis portugueses), nunca para números de valor acrescentado ou internacionais. O Asterisk só aceita chamadas do operador configurado.
+
 ## Versão para PC (Windows): demonstrações
 
 Um único `Atendia.exe` com a base de dados incluída. Abre o painel no browser e permite **testar o assistente pelo microfone**, sem Twilio. Serve para demonstrações; para clientes reais, use o deploy no servidor.

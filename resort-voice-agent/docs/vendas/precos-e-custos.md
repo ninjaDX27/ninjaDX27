@@ -28,6 +28,22 @@ Os limites são aplicados na ficha do cliente em **Administração**: minutos po
 | Alojamento (Render: web + Postgres) | ~0,01 € | ~25 €/mês repartidos pelos clientes |
 | **Total** | **≈ 0,12–0,18 €/min** | |
 
+## Atenção: custo dos números de telefone
+
+Preço confirmado em novembro de 2026: um número **móvel** português no Twilio custa **$135/mês**. Não encontrei o preço dos números fixos portugueses no Twilio; confirme-o antes de vender. Com números móveis do Twilio, o plano Essencial dá prejuízo.
+
+## Custo com voz própria (Asterisk + Whisper + Piper)
+
+| Componente | Estimativa |
+|---|---|
+| Operador SIP: número fixo português | ~1–5 €/mês por resort |
+| Operador SIP: chamada recebida | ~0–0,01 €/min |
+| Claude | ~0,03–0,06 €/min |
+| VPS (4 vCPU / 8 GB), partilhada por todos os resorts | ~15–30 €/mês |
+| **Total por minuto** | **≈ 0,04–0,07 €/min** |
+
+Plano Essencial (149 €, 400 min): custo ≈ 20–30 € + número ≈ 5 € → **margem de ~75–80%**. Os preços do operador SIP e da VPS são estimativas: confirme-os com o fornecedor escolhido.
+
 ## Margem estimada por plano (uso completo dos minutos)
 
 | | Receita | Custo (0,15 €/min) | Margem bruta |

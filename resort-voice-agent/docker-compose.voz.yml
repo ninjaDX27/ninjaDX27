@@ -1,0 +1,43 @@
+# Voz própria (sem Twilio): Atendia + Postgres + serviço de voz (Whisper/Piper) + Asterisk.
+# Para um servidor próprio (VPS) com IP público. Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.voz.yml up -d --build
+services:
+  app:
+    environment:
+      ASTERISK_ENABLED: "true"
+      AUDIOSOCKET_HOST: 0.0.0.0          # só na rede interna do Docker (porta não publicada)
+      AUDIOSOCKET_PORT: "9092"
+      SPEECH_URL: http://speech:8000
+    depends_on:
+      speech:
+        condition: service_healthy
+
+  speech:
+    build: ./speech
+    environment:
+      SPEECH_TOKEN: ${SPEECH_TOKEN:?defina SPEECH_TOKEN no .env}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 3g
+    restart: unless-stopped
+
+  asterisk:
+    build: ./asterisk
+    environment:
+      SIP_HOST: ${SIP_HOST:?defina SIP_HOST}
+      SIP_USERNAME: ${SIP_USERNAME:?defina SIP_USERNAME}
+      SIP_PASSWORD: ${SIP_PASSWORD:?defina SIP_PASSWORD}
+      PUBLIC_IP: ${PUBLIC_IP:?defina PUBLIC_IP}
+      ASTERISK_SECRET: ${ASTERISK_SECRET:?defina ASTERISK_SECRET}
+      ATENDIA_URL: http://app:8080
+      AUDIOSOCKET_ADDR: app:9092
+      DEFAULT_DID: ${DEFAULT_DID:-}
+      DIAL_PREFIX: ${DIAL_PREFIX:-+}
+    ports:
+      - "5060:5060/udp"
+      - "10000-10100:10000-10100/udp"
+    depends_on: [app]
+    restart: unless-stopped
